@@ -10,7 +10,7 @@ export default function Commissions() {
   useEffect(() => {
     setRows(null);
     const from = `${month}-01`; const d = new Date(from); d.setUTCMonth(d.getUTCMonth() + 1);
-    fetch(`/api/admin-proxy/admin/reports?kind=commissions&from=${from}&to=${d.toISOString().slice(0, 10)}`).then((r) => r.text()).then((csv) => setRows(csv.replace(/^﻿/, "").trim().split("\n").slice(1).filter(Boolean).map((l) => l.split(","))));
+    fetch(`/api/admin-proxy?${new URLSearchParams({ path: "admin/reports", kind: "commissions", from, to: d.toISOString().slice(0, 10) }).toString()}`).then((r) => r.text()).then((csv) => setRows(csv.replace(/^﻿/, "").trim().split("\n").slice(1).filter(Boolean).map((l) => l.split(","))));
   }, [month]);
   const total = (i: number) => (rows ?? []).reduce((s, r) => s + Number(r[i] || 0), 0);
   return (

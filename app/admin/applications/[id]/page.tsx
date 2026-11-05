@@ -60,7 +60,7 @@ export default function ApplicationReview() {
       <section className="panel p-4 grid gap-2"><h2 className="text-lg">Documents (private)</h2>
         {data.documents.length === 0 ? <p className="muted">No documents uploaded.</p> : <ul className="grid gap-2">{data.documents.map((d) => (
           <li key={d._id} className="flex items-center gap-3 flex-wrap"><FileText aria-hidden size={18} /><span className="flex-1">{d.kind.replace(/_/g, " ")} — {d.fileName} <span className="muted text-sm">({Math.round(d.sizeBytes / 1024)} KB, {dateTime(d.createdAt)})</span></span><StatusBadge status={d.status} />
-            {can("documents.view") && <a className="btn btn-sm btn-outline" href={`/api/admin-proxy/admin/documents/${d._id}`} target="_blank" rel="noreferrer">Open</a>}
+            {can("documents.view") && <a className="btn btn-sm btn-outline" href={`/api/admin-proxy?path=${encodeURIComponent(`admin/documents/${d._id}`)}`} target="_blank" rel="noreferrer">Open</a>}
             {can("applications.review") && <><button className="btn btn-sm btn-outline" onClick={async () => { await api(`admin/resources/documents/${d._id}`, "PATCH", { status: "accepted" }); reload(); }}>Accept</button><button className="btn btn-sm btn-danger" onClick={async () => { await api(`admin/resources/documents/${d._id}`, "PATCH", { status: "rejected" }); reload(); }}>Reject</button></>}
           </li>
         ))}</ul>}
@@ -70,7 +70,7 @@ export default function ApplicationReview() {
       <section className="panel p-4 grid gap-2"><h2 className="text-lg">Services ({data.services.length})</h2>
         <ul className="grid gap-1">{data.services.map((s) => <li key={s._id} className="flex gap-3"><span className="flex-1">{s.name} {s.description && <span className="muted">— {s.description.slice(0, 80)}</span>}</span><span>{s.durationMin} min</span><span className="tabular-nums">{inr(s.pricePaise)}</span></li>)}</ul>
       </section>
-      {p.gallery.length > 0 && <section className="panel p-4 grid gap-2"><h2 className="text-lg">Photos</h2><ul className="grid grid-cols-4 gap-2">{p.gallery.map((g) => <li key={g.url}><img src={g.url.replace("/api/v1/", "/api/admin-proxy/")} alt={g.caption ?? ""} className="aspect-square object-cover rounded-lg" /></li>)}</ul></section>}
+      {p.gallery.length > 0 && <section className="panel p-4 grid gap-2"><h2 className="text-lg">Photos</h2><ul className="grid grid-cols-4 gap-2">{p.gallery.map((g) => <li key={g.url}><img src={`/api/admin-proxy?path=${encodeURIComponent(g.url.split("/api/v1/").pop() ?? "")}`} alt={g.caption ?? ""} className="aspect-square object-cover rounded-lg" /></li>)}</ul></section>}
     </div>
   );
 }
