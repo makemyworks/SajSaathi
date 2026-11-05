@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+/* Saj Saathi design tokens — the single source for all three apps.
+   Colours: change here (and in lib/brand.ts for meta/theme colour). */
+@theme {
+  --color-teal-950: #0c2421;
+  --color-teal-900: #102b28;
+  --color-teal-800: #183f3a; /* brand deep forest teal */
+  --color-teal-700: #22554e;
+  --color-teal-600: #2f6b62;
+  --color-teal-100: #dfeae7;
+  --color-teal-50: #eef4f2;
+  --color-ivory: #f7f5ef; /* page background */
+  --color-sand: #ece7da; /* quiet dividers & fills */
+  --color-gold: #b98a45; /* mark & decorative only — 2.8:1 on ivory */
+  --color-gold-light: #d9b77c; /* on teal backgrounds */
+  --color-gold-ink: #8a6528; /* gold text on light backgrounds — 4.85:1 */
+  --color-ink: #202725; /* charcoal body text — 13.9:1 on ivory */
+  --color-ink-soft: #55615c; /* secondary text — 6.4:1 on white */
+  --color-line: #dcd8cc;
+  --color-ok: #1f6b45;
+  --color-warn: #8a5a00;
+  --color-bad: #b42318;
+
+  --font-display: var(--font-lora), var(--font-mukta), Georgia, "Noto Serif Devanagari", serif;
+  --font-sans: var(--font-mukta), system-ui, "Noto Sans Devanagari", "Segoe UI", Roboto, sans-serif;
+
+  --radius-chip: 999px;
+  --radius-panel: 14px;
+  --radius-field: 10px;
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--color-ivory);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 1.0625rem; /* 17px: comfortable on low-end phones */
+    line-height: 1.55;
+    text-rendering: optimizeLegibility;
+  }
+  :lang(hi) body, [lang="hi"] { line-height: 1.7; }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 600; line-height: 1.2; letter-spacing: -0.005em; color: var(--color-teal-900); }
+  h1 { font-size: clamp(1.75rem, 1.2rem + 2.4vw, 2.75rem); }
+  h2 { font-size: clamp(1.35rem, 1.1rem + 1.1vw, 1.85rem); }
+  h3 { font-size: 1.2rem; }
+  a { color: inherit; }
+  :focus-visible { outline: 3px solid var(--color-gold); outline-offset: 2px; border-radius: 4px; }
+  ::selection { background: var(--color-teal-100); }
+  input, select, textarea, button { font: inherit; }
+  img { max-width: 100%; height: auto; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  }
+}
+
+@layer components {
+  .wrap { width: 100%; max-width: 72rem; margin-inline: auto; padding-inline: 1rem; }
+  @media (min-width: 640px) { .wrap { padding-inline: 1.5rem; } }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-height: 48px; padding: .65rem 1.25rem; border-radius: var(--radius-field); font-weight: 600; font-size: 1rem; text-decoration: none; transition: background-color .15s, border-color .15s; cursor: pointer; border: 1px solid transparent; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn-primary { background: var(--color-teal-800); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--color-teal-700); }
+  .btn-light { background: var(--color-ivory); color: var(--color-teal-900); }
+  .btn-outline { background: #fff; color: var(--color-teal-900); border-color: var(--color-line); }
+  .btn-outline:hover:not(:disabled) { border-color: var(--color-teal-700); }
+  .btn-danger { background: #fff; color: var(--color-bad); border-color: #f0c8c4; }
+  .btn-sm { min-height: 40px; padding: .4rem .9rem; font-size: .95rem; }
+  .btn-xl { min-height: 56px; font-size: 1.1rem; padding-inline: 1.6rem; }
+
+  .field { display: grid; gap: .35rem; }
+  .field > span { font-weight: 600; font-size: .95rem; }
+  .field small { color: var(--color-ink-soft); font-size: .875rem; }
+  .input { width: 100%; min-height: 48px; padding: .6rem .8rem; border: 1px solid var(--color-line); border-radius: var(--radius-field); background: #fff; color: var(--color-ink); }
+  .input:focus { outline: 2px solid var(--color-teal-700); outline-offset: 0; border-color: var(--color-teal-700); }
+  textarea.input { min-height: 96px; }
+
+  .panel { background: #fff; border: 1px solid var(--color-line); border-radius: var(--radius-panel); }
+  .chip { display: inline-flex; align-items: center; gap: .35rem; padding: .3rem .8rem; border-radius: var(--radius-chip); border: 1px solid var(--color-line); background: #fff; font-size: .95rem; min-height: 40px; text-decoration: none; }
+  .chip[aria-pressed="true"], .chip[aria-current="page"] { background: var(--color-teal-800); color: #fff; border-color: var(--color-teal-800); }
+  .badge { display: inline-flex; align-items: center; gap: .3rem; padding: .1rem .55rem; border-radius: 6px; font-size: .85rem; font-weight: 600; background: var(--color-sand); color: var(--color-ink); }
+  .badge-ok { background: #e3f1e9; color: var(--color-ok); }
+  .badge-warn { background: #fbf0d9; color: var(--color-warn); }
+  .badge-bad { background: #fbe6e4; color: var(--color-bad); }
+  .badge-teal { background: var(--color-teal-50); color: var(--color-teal-800); }
+  .muted { color: var(--color-ink-soft); }
+  .prose-legal h2 { margin-top: 2rem; margin-bottom: .5rem; }
+  .prose-legal p, .prose-legal li { max-width: 70ch; margin-block: .5rem; }
+  .prose-legal ul { list-style: disc; padding-left: 1.25rem; }
+  .skip-link { position: absolute; left: -9999px; }
+  .skip-link:focus { left: 1rem; top: 1rem; z-index: 100; background: #fff; padding: .5rem 1rem; }
+}
