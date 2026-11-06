@@ -21,6 +21,11 @@ export const metadata: Metadata = {
 };
 export const viewport: Viewport = { themeColor: BRAND.colors.teal, width: "device-width", initialScale: 1 };
 
+// Locale and customer/admin sessions are cookie-backed. Do not prerender routes
+// that must resolve request cookies; doing so causes caught DYNAMIC_SERVER_USAGE
+// errors in the customer header during the Vercel build.
+export const dynamic = "force-dynamic";
+
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const lang = await locale();
   return (

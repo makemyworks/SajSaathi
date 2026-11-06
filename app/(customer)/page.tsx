@@ -41,6 +41,15 @@ export default async function HomePage() {
     nearby = dbNearby;
     atHome = dbAtHome;
     livePromos = promotions.filter((p) => !p.validTo || p.validTo > new Date());
+    // A reachable but unseeded database must not make the homepage look broken
+    // or imply that the live catalogue is ready. Preview categories are static
+    // catalogue definitions only; they are deliberately not linked to booking.
+    if (dbCategories.length === 0) {
+      marketplaceReady = false;
+      categories = seedCategories(new Date()).map((category, index) =>
+        publicCategory({ _id: `preview-${index}`, ...category } as Category),
+      );
+    }
   } catch (error) {
     marketplaceReady = false;
     // Never fabricate providers, prices, ratings or bookings. Seed categories are

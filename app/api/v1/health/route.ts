@@ -8,8 +8,19 @@ export async function GET() {
   const integrations = integrationStatus().map((item) => ({ key: item.key, active: item.active }));
   try {
     const ctx = await getCtx();
-    await ctx.repo.col("settings").findOne({ _id: "platform" });
-    return NextResponse.json({ ok: true, version: "v1", database: "connected", integrations });
+    const [platformSettings, activeCategoryCount] = await Promise.all([
+      ctx.repo.col<{ _id: string }>("settings").findOne({ _id: "platform" }),
+      ctx.repo.col<{ _id: string }>("categories").count({ status: "active", visible: true }),
+    ]);
+    const setupComplete = Boolean(platformSettings && activeCategoryCount > 0);
+    return NextResponse.json({
+      ok: true,
+      version: "v1",
+      database: "connected",
+      setup: setupComplete ? "complete" : "required",
+      setupMessage: setupComplete ? undefined : "Run `npm run setup` once against this database to add the base catalogue and platform settings.",
+      integrations,
+    });
   } catch (error) {
     // The raw error is kept in Vercel Runtime Logs, never returned to the browser.
     console.error("[Saj Saathi health] Runtime dependency check failed:", error);

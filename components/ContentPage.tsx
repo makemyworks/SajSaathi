@@ -29,8 +29,15 @@ export function Prose({ text }: { text: string }) {
 }
 
 export async function ContentPage({ slug, crumbs, children }: { slug: string; crumbs?: { href: string; label: string }[]; children?: React.ReactNode }) {
-  const [ctx, lang] = await Promise.all([getCtx(), locale()]);
-  const db = await ctx.repo.col<{ _id: string; slug: string; published: boolean; title: Record<string, string>; body?: Record<string, string> }>("pages").findOne({ slug, published: true });
+  const lang = await locale();
+  let db: { _id: string; slug: string; published: boolean; title: Record<string, string>; body?: Record<string, string> } | null = null;
+  try {
+    const ctx = await getCtx();
+    db = await ctx.repo.col<{ _id: string; slug: string; published: boolean; title: Record<string, string>; body?: Record<string, string> }>("pages").findOne({ slug, published: true });
+  } catch (error) {
+    // Static public copy remains available during first-time setup or a temporary DB outage.
+    console.error(`[Saj Saathi] CMS content unavailable for /${slug}; using bundled copy:`, error);
+  }
   const def = CONTENT[slug];
   const title = db ? db.title[lang] || db.title.en : def?.title ?? slug;
   const body = db ? db.body?.[lang] || db.body?.en || "" : def?.body ?? "";
