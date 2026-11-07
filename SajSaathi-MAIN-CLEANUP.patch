@@ -1,0 +1,1128 @@
+diff --git a/app/api/session/login/route.ts b/app/api/session/login/route.ts
+deleted file mode 100644
+index f8bd723..0000000
+--- a/app/api/session/login/route.ts
++++ /dev/null
+@@ -1,47 +0,0 @@
+-import { NextResponse, type NextRequest } from "next/server";
+-import { authUnavailable, callApi, forbidden, sameOrigin, setSession } from "@/lib/bff";
+-
+-export const dynamic = "force-dynamic";
+-
+-export async function POST(req: NextRequest) {
+-  if (!sameOrigin(req)) return forbidden();
+-  const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+-  const identifier = typeof body?.identifier === "string" ? body.identifier.trim() : "";
+-  const password = typeof body?.password === "string" ? body.password : "";
+-  if (!identifier || !password) {
+-    return NextResponse.json({ error: { code: "validation_error", message: "Enter your mobile number or email and password." } }, { status: 400, headers: { "cache-control": "no-store" } });
+-  }
+-
+-  let upstream: Response;
+-  try {
+-    upstream = await callApi(req, "/auth/login", {
+-      method: "POST",
+-      contentType: "application/json",
+-      body: JSON.stringify({ identifier, password, app: "partner" }),
+-      signal: AbortSignal.timeout(20_000),
+-    });
+-  } catch (error) {
+-    console.error("[Partner sign-in] Central API request failed:", error instanceof Error ? error.message : "unknown error");
+-    return authUnavailable();
+-  }
+-
+-  const payload = await upstream.json().catch(() => null) as { token?: string; user?: unknown; ttl?: number; mfaRequired?: boolean; error?: unknown } | null;
+-  if (!upstream.ok) {
+-    const response = payload && typeof payload === "object" && payload.error
+-      ? { error: payload.error }
+-      : { error: { code: "upstream_error", message: `Saj Saathi could not sign you in (HTTP ${upstream.status}). Please try again.` } };
+-    return NextResponse.json(response, { status: upstream.status, headers: { "cache-control": "no-store" } });
+-  }
+-  if (payload?.mfaRequired) {
+-    return NextResponse.json({ error: { code: "mfa_not_supported_for_partner", message: "This account requires an administrator sign-in flow. Please use the correct Partner account or contact support." } }, { status: 403, headers: { "cache-control": "no-store" } });
+-  }
+-  if (!payload?.token || !payload.user) {
+-    return NextResponse.json({ error: { code: "invalid_auth_response", message: "The central service did not return a valid Partner session. Check the Customer API deployment and try again." } }, { status: 502, headers: { "cache-control": "no-store" } });
+-  }
+-
+-  const response = NextResponse.json({ user: payload.user }, { headers: { "cache-control": "no-store" } });
+-  setSession(response, payload.token, payload.ttl ?? 60 * 60 * 24 * 30);
+-  const locale = (payload.user as { locale?: string }).locale;
+-  if (locale === "hi" || locale === "en") response.cookies.set({ name: "ss_locale", value: locale, httpOnly: false, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/", maxAge: 31536000 });
+-  return response;
+-}
+diff --git a/app/api/session/logout/route.ts b/app/api/session/logout/route.ts
+deleted file mode 100644
+index 26a10cf..0000000
+--- a/app/api/session/logout/route.ts
++++ /dev/null
+@@ -1,13 +0,0 @@
+-import { NextResponse, type NextRequest } from "next/server";
+-import { callApi, COOKIE, forbidden, sameOrigin } from "@/lib/bff";
+-
+-export const dynamic = "force-dynamic";
+-
+-export async function POST(req: NextRequest) {
+-  if (!sameOrigin(req)) return forbidden();
+-  const token = req.cookies.get(COOKIE)?.value;
+-  if (token) await callApi(req, "/auth/logout", { method: "POST", token, signal: AbortSignal.timeout(10_000) }).catch(() => undefined);
+-  const response = NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+-  response.cookies.set({ name: COOKIE, value: "", path: "/", maxAge: 0, httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax" });
+-  return response;
+-}
+diff --git a/app/api/session/signup/route.ts b/app/api/session/signup/route.ts
+deleted file mode 100644
+index d4a521f..0000000
+--- a/app/api/session/signup/route.ts
++++ /dev/null
+@@ -1,62 +0,0 @@
+-import { NextResponse, type NextRequest } from "next/server";
+-import { authUnavailable, callApi, forbidden, sameOrigin, setSession } from "@/lib/bff";
+-
+-export const dynamic = "force-dynamic";
+-
+-export async function POST(req: NextRequest) {
+-  if (!sameOrigin(req)) return forbidden();
+-  const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+-  const name = typeof body?.name === "string" ? body.name.trim() : "";
+-  const phone = typeof body?.phone === "string" ? body.phone.trim() : "";
+-  const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
+-  const password = typeof body?.password === "string" ? body.password : "";
+-  const acceptTerms = body?.acceptTerms === true;
+-  const locale = body?.locale === "hi" ? "hi" : "en";
+-
+-  if (name.length < 2 || name.length > 80) {
+-    return NextResponse.json({ error: { code: "validation_error", message: "Enter your full name (2–80 characters)." } }, { status: 400, headers: { "cache-control": "no-store" } });
+-  }
+-  const digits = phone.replace(/[^\d+]/g, "").replace(/^\+/, "");
+-  const normalizedDigits = digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits.length === 11 && digits.startsWith("0") ? digits.slice(1) : digits;
+-  if (!/^[6-9]\d{9}$/.test(normalizedDigits)) {
+-    return NextResponse.json({ error: { code: "validation_error", message: "Enter a valid 10-digit Indian mobile number." } }, { status: 400, headers: { "cache-control": "no-store" } });
+-  }
+-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+-    return NextResponse.json({ error: { code: "validation_error", message: "Enter a valid email address or leave it blank." } }, { status: 400, headers: { "cache-control": "no-store" } });
+-  }
+-  if (password.length < 8 || password.length > 128 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+-    return NextResponse.json({ error: { code: "validation_error", message: "Use at least 8 characters, including one letter and one number." } }, { status: 400, headers: { "cache-control": "no-store" } });
+-  }
+-  if (!acceptTerms) {
+-    return NextResponse.json({ error: { code: "terms_required", message: "Please accept the Terms and Privacy Policy to create your account." } }, { status: 400, headers: { "cache-control": "no-store" } });
+-  }
+-
+-  let upstream: Response;
+-  try {
+-    upstream = await callApi(req, "/auth/register", {
+-      method: "POST",
+-      contentType: "application/json",
+-      body: JSON.stringify({ name, phone, email: email || undefined, password, role: "partner_owner", locale, acceptTerms: true }),
+-      signal: AbortSignal.timeout(20_000),
+-    });
+-  } catch (error) {
+-    console.error("[Partner sign-up] Central API request failed:", error instanceof Error ? error.message : "unknown error");
+-    return authUnavailable();
+-  }
+-
+-  const payload = await upstream.json().catch(() => null) as { token?: string; user?: unknown; ttl?: number; error?: unknown } | null;
+-  if (!upstream.ok) {
+-    const response = payload && typeof payload === "object" && payload.error
+-      ? { error: payload.error }
+-      : { error: { code: "upstream_error", message: `Saj Saathi could not create your account (HTTP ${upstream.status}). Please try again.` } };
+-    return NextResponse.json(response, { status: upstream.status, headers: { "cache-control": "no-store" } });
+-  }
+-  if (!payload?.token || !payload.user) {
+-    return NextResponse.json({ error: { code: "invalid_auth_response", message: "Your account request reached Saj Saathi, but a Partner session was not returned. Contact support before submitting again." } }, { status: 502, headers: { "cache-control": "no-store" } });
+-  }
+-
+-  const response = NextResponse.json({ user: payload.user }, { headers: { "cache-control": "no-store" } });
+-  setSession(response, payload.token, payload.ttl ?? 60 * 60 * 24 * 30);
+-  response.cookies.set({ name: "ss_locale", value: locale, httpOnly: false, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/", maxAge: 31536000 });
+-  return response;
+-}
+diff --git a/app/application/page.tsx b/app/application/page.tsx
+deleted file mode 100644
+index 2bab654..0000000
+--- a/app/application/page.tsx
++++ /dev/null
+@@ -1,11 +0,0 @@
+-import { redirect } from "next/navigation";
+-
+-/**
+- * The partner application experience lives in the separately deployed
+- * SajSaathiPartner app. This legacy Main-site path now sends visitors to the
+- * customer-facing professional information page instead of importing
+- * Partner-only components into the Customer + Admin build.
+- */
+-export default function ApplicationPage(): never {
+-  redirect("/professional");
+-}
+diff --git a/app/bookings/[id]/page.tsx b/app/bookings/[id]/page.tsx
+deleted file mode 100644
+index 6000da8..0000000
+--- a/app/bookings/[id]/page.tsx
++++ /dev/null
+@@ -1,55 +0,0 @@
+-"use client";
+-import { Fragment, useEffect, useState } from "react";
+-import { useParams } from "next/navigation";
+-import Link from "next/link";
+-import { api, useData } from "@/lib/client";
+-import type { Booking, Category } from "@/lib/core/types";
+-import { dateTime, inr, istDate, dayLabel } from "@/lib/shared/format";
+-import { LoadFailure, Notice, Spinner, StatusBadge } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-import { BookingCard } from "@/components/BookingCard";
+-
+-type Detail = { booking: Booking; category: Pick<Category, "bookingFields" | "name"> | null };
+-
+-export default function BookingDetail() {
+-  const { id } = useParams() as { id: string };
+-  const { t, locale, pick, app } = usePartner();
+-  const { data, error, reload } = useData<Detail>(`bookings/${id}`);
+-  const [move, setMove] = useState(false);
+-  if (!data) return error ? <LoadFailure message={error} onRetry={reload} /> : <Spinner label={t.common.loading} />;
+-  const b = data.booking;
+-  const fields = data.category?.bookingFields ?? [];
+-  return (
+-    <div className="grid gap-4">
+-      <Link href="/bookings" className="underline muted">← {t.bookings.title}</Link>
+-      <ul><BookingCard b={{ ...b, start: String(b.start), end: String(b.end), arrivedAt: b.arrivedAt ? String(b.arrivedAt) : undefined, area: b.address ? `${b.address.locality ?? ""} ${b.address.pin}` : undefined }} onChange={reload} showDate /></ul>
+-      <dl className="panel p-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+-        <dt className="muted">Ref</dt><dd className="tabular-nums">{b.ref}</dd>
+-        <dt className="muted">{t.bookings.when}</dt><dd>{dateTime(b.start, locale)}</dd>
+-        {b.address && <><dt className="muted">{t.bookings.where}</dt><dd>{[b.address.line1, b.address.line2, b.address.locality, b.address.landmark, b.address.city, b.address.pin].filter(Boolean).join(", ")}</dd></>}
+-        {fields.map((f) => b.fields[f.key] !== undefined && b.fields[f.key] !== "" ? <Fragment key={f.key}><dt className="muted">{pick(f.label)}</dt><dd>{Array.isArray(b.fields[f.key]) ? (b.fields[f.key] as string[]).join(", ") : typeof b.fields[f.key] === "boolean" ? (b.fields[f.key] ? t.common.yes : t.common.no) : f.options?.find((o) => o.value === b.fields[f.key]) ? pick(f.options.find((o) => o.value === b.fields[f.key])!.label) : String(b.fields[f.key])}</dd></Fragment> : null)}
+-        <dt className="muted">{t.bookings.total}</dt><dd className="tabular-nums">{inr(b.price.totalPaise, locale)} · {b.paymentStatus === "captured" ? t.bookings.paid : t.bookings.payAtVenue}</dd>
+-      </dl>
+-      {["pending", "confirmed", "rescheduled"].includes(b.status) && app?.application && (
+-        <div className="grid gap-2"><button className="btn btn-outline justify-self-start" onClick={() => setMove(!move)}>{t.bookings.reschedule}</button>{move && <Reschedule id={b._id} slug={app.application.slug} serviceId={b.serviceId} mode={b.mode} addOns={b.addOnIds} onDone={() => { setMove(false); reload(); }} />}</div>
+-      )}
+-      <section className="grid gap-2"><h2 className="text-lg">History</h2><ol className="grid gap-1 border-l-2 border-[var(--color-line)] pl-4">{b.history.map((h, i) => <li key={i}><StatusBadge status={h.to} label={t.status[h.to as keyof typeof t.status] ?? h.to} /> <span className="muted text-sm">{dateTime(h.at, locale)}</span>{h.note && <span className="block text-[0.95rem]">{h.note}</span>}</li>)}</ol></section>
+-    </div>
+-  );
+-}
+-
+-function Reschedule({ id, slug, serviceId, mode, addOns, onDone }: { id: string; slug: string; serviceId: string; mode: string; addOns: string[]; onDone: () => void }) {
+-  const { t, locale } = usePartner();
+-  const dates = Array.from({ length: 14 }, (_, i) => istDate(i));
+-  const [date, setDate] = useState(dates[0]);
+-  const [slots, setSlots] = useState<{ time: string; start: string }[] | null>(null);
+-  const [err, setErr] = useState("");
+-  useEffect(() => { setSlots(null); api<{ slots: { time: string; start: string }[] }>(`providers/${slug}/slots?${new URLSearchParams({ serviceId, date, mode, addOns: addOns.join(",") })}`).then((j) => setSlots(j.slots)).catch(() => setSlots([])); }, [date, slug, serviceId, mode, addOns]);
+-  return (
+-    <div className="panel p-4 grid gap-3">
+-      <div className="flex gap-2 overflow-x-auto pb-1">{dates.map((d) => { const l = dayLabel(d, locale); return <button key={d} className="chip shrink-0" aria-pressed={d === date} onClick={() => setDate(d)}>{l.day} {l.num}</button>; })}</div>
+-      {slots === null ? <Spinner label={t.common.loading} /> : <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">{slots.map((s) => <button key={s.start} className="btn btn-outline btn-sm tabular-nums" onClick={async () => { try { await api(`bookings/${id}/reschedule`, "POST", { start: s.start }); onDone(); } catch (e) { setErr((e as Error).message); } }}>{s.time}</button>)}</div>}
+-      {err && <Notice tone="bad">{err}</Notice>}
+-    </div>
+-  );
+-}
+diff --git a/app/bookings/new/page.tsx b/app/bookings/new/page.tsx
+deleted file mode 100644
+index 5496195..0000000
+--- a/app/bookings/new/page.tsx
++++ /dev/null
+@@ -1,51 +0,0 @@
+-"use client";
+-import { useEffect, useMemo, useState } from "react";
+-import { useRouter } from "next/navigation";
+-import Link from "next/link";
+-import type { Service } from "@/lib/core/types";
+-import { api, useData } from "@/lib/client";
+-import { istDate, dayLabel, inr } from "@/lib/shared/format";
+-import { Empty, LoadFailure, Notice, Spinner } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-
+-export default function WalkIn() {
+-  const { t, locale, app } = usePartner();
+-  const isHindi = locale === "hi";
+-  const router = useRouter();
+-  const { data, error: servicesError, reload: reloadServices } = useData<{ services: Service[] }>("partner/services");
+-  const services = useMemo(() => data?.services.filter((s) => s.active) ?? [], [data?.services]);
+-  const [serviceId, setServiceId] = useState("");
+-  const [date, setDate] = useState(istDate(0));
+-  const [slots, setSlots] = useState<{ time: string; start: string }[] | null>(null);
+-  const [start, setStart] = useState("");
+-  const [err, setErr] = useState("");
+-  const [busy, setBusy] = useState(false);
+-  useEffect(() => { if (!serviceId && services[0]) setServiceId(services[0]._id); }, [services, serviceId]);
+-  useEffect(() => {
+-    if (!serviceId || !app?.application) return;
+-    setSlots(null); setStart("");
+-    api<{ slots: { time: string; start: string }[] }>(`providers/${app.application.slug}/slots?${new URLSearchParams({ serviceId, date })}`).then((j) => setSlots(j.slots)).catch(() => setSlots([]));
+-  }, [serviceId, date, app]);
+-  const now = () => { const d = new Date(Math.ceil(Date.now() / 300000) * 300000); return d.toISOString(); };
+-  return (
+-    <form className="grid gap-4" onSubmit={async (e) => {
+-      e.preventDefault(); const f = new FormData(e.currentTarget); setBusy(true); setErr("");
+-      try { await api("bookings", "POST", { providerId: app!.application!._id, serviceId, start, addOnIds: [], mode: "in_store", paymentMethod: "pay_at_venue", customerName: f.get("name"), customerPhone: f.get("phone") || undefined }); router.push("/bookings?tab=today"); }
+-      catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
+-    }}>
+-      <h1 className="text-2xl">{t.bookings.walkIn}</h1>
+-      {!data ? (servicesError ? <LoadFailure message={servicesError} onRetry={reloadServices} /> : <Spinner label={t.common.loading} />) : services.length === 0 ? <Empty title={isHindi ? "अभी कोई सक्रिय सेवा नहीं है" : "No active services yet"} body={isHindi ? "वॉक-इन बुकिंग जोड़ने से पहले कम से कम एक सेवा और कीमत जोड़ें।" : "Add at least one service and price before creating a walk-in booking."} action={<Link href="/services" className="btn btn-outline btn-sm">{t.apply.goServices}</Link>} /> : (
+-        <label className="field"><span>{t.bookings.service}</span><select className="input" value={serviceId} onChange={(e) => setServiceId(e.target.value)}>{services.map((s) => <option key={s._id} value={s._id}>{s.name} · {inr(s.pricePaise, locale)}</option>)}</select></label>
+-      )}
+-      <div className="flex gap-2 overflow-x-auto pb-1">{Array.from({ length: 7 }, (_, i) => istDate(i)).map((d) => { const l = dayLabel(d, locale); return <button type="button" key={d} className="chip shrink-0" aria-pressed={d === date} onClick={() => setDate(d)}>{l.day} {l.num}</button>; })}</div>
+-      <div className="flex flex-wrap gap-2">
+-        {date === istDate(0) && <button type="button" className="chip" aria-pressed={start !== "" && !slots?.some((s) => s.start === start)} onClick={() => setStart(now())}>Now</button>}
+-        {slots === null ? <Spinner label={t.common.loading} /> : slots.map((s) => <button type="button" key={s.start} className="chip tabular-nums" aria-pressed={start === s.start} onClick={() => setStart(s.start)}>{s.time}</button>)}
+-      </div>
+-      <label className="field"><span>{t.bookings.walkInName}</span><input name="name" className="input" required /></label>
+-      <label className="field"><span>{t.bookings.walkInPhone}</span><input name="phone" className="input" inputMode="tel" /></label>
+-      {err && <Notice tone="bad">{err}</Notice>}
+-      <button className="btn btn-primary btn-xl" disabled={busy || !start || !serviceId}>{t.bookings.save}</button>
+-    </form>
+-  );
+-}
+diff --git a/app/bookings/page.tsx b/app/bookings/page.tsx
+deleted file mode 100644
+index cd82ebd..0000000
+--- a/app/bookings/page.tsx
++++ /dev/null
+@@ -1,25 +0,0 @@
+-"use client";
+-import { Suspense } from "react";
+-import Link from "next/link";
+-import { useSearchParams } from "next/navigation";
+-import { Plus } from "lucide-react";
+-import { useData } from "@/lib/client";
+-import { Empty, LoadFailure, Spinner } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-import { BookingCard, type BookingRow } from "@/components/BookingCard";
+-
+-const TABS = ["pending", "today", "upcoming", "completed", "cancelled"] as const;
+-function List() {
+-  const { t } = usePartner();
+-  const sp = useSearchParams();
+-  const tab = (TABS as readonly string[]).includes(sp.get("tab") ?? "") ? (sp.get("tab") as (typeof TABS)[number]) : "pending";
+-  const { data, loading, error, reload } = useData<{ bookings: BookingRow[] }>(`partner/bookings?scope=${tab}`);
+-  return (
+-    <div className="grid gap-4">
+-      <div className="flex items-center gap-3"><h1 className="text-2xl mr-auto">{t.bookings.title}</h1><Link href="/bookings/new" className="btn btn-primary btn-sm"><Plus aria-hidden size={18} />{t.bookings.walkIn}</Link></div>
+-      <nav className="flex gap-2 overflow-x-auto pb-1">{TABS.map((k) => <Link key={k} className="chip shrink-0" aria-current={k === tab ? "page" : undefined} href={`/bookings?tab=${k}`}>{t.bookings.tabs[k]}</Link>)}</nav>
+-      {!data ? (error ? <LoadFailure message={error} onRetry={reload} /> : loading ? <Spinner label={t.common.loading} /> : null) : data.bookings.length === 0 ? <Empty title={t.bookings.empty} /> : <ul className="grid gap-3">{data.bookings.map((b) => <BookingCard key={b._id} b={b} onChange={reload} showDate={tab !== "today"} />)}</ul>}
+-    </div>
+-  );
+-}
+-export default function Page() { return <Suspense><List /></Suspense>; }
+diff --git a/app/branches/page.tsx b/app/branches/page.tsx
+deleted file mode 100644
+index 138155c..0000000
+--- a/app/branches/page.tsx
++++ /dev/null
+@@ -1,43 +0,0 @@
+-"use client";
+-import { useEffect, useState } from "react";
+-import Link from "next/link";
+-import { Plus, Trash2 } from "lucide-react";
+-import type { Branch } from "@/lib/core/types";
+-import { api } from "@/lib/client";
+-import { LoadFailure, Notice, Spinner } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-
+-export default function BranchesPage() {
+-  const { t, app, appError, appLoading, reloadApp } = usePartner();
+-  const [list, setList] = useState<Branch[] | null>(null);
+-  const [msg, setMsg] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+-  useEffect(() => { if (app?.application) setList(app.application.branches ?? []); }, [app]);
+-  if (!list) {
+-    if (appError) return <LoadFailure message={appError} onRetry={reloadApp} />;
+-    if (appLoading) return <Spinner label={t.common.loading} />;
+-    return <div className="grid gap-3"><Notice tone="info">Start or complete your business application before managing branches.</Notice><Link className="btn btn-primary justify-self-start" href="/application">Open application</Link></div>;
+-  }
+-  const upd = (i: number, b: Branch) => setList(list.map((x, j) => (j === i ? b : x)));
+-  return (
+-    <div className="grid gap-4">
+-      <h1 className="text-2xl">{t.branches.title}</h1>
+-      <p className="muted">{t.branches.hint}</p>
+-      {list.map((b, i) => (
+-        <fieldset key={b.id || i} className="panel p-4 grid sm:grid-cols-2 gap-3">
+-          <label className="field sm:col-span-2"><span>{t.branches.name}</span><input className="input" value={b.name} onChange={(e) => upd(i, { ...b, name: e.target.value })} /></label>
+-          <label className="field sm:col-span-2"><span>{t.apply.line1}</span><input className="input" value={b.address.line1} onChange={(e) => upd(i, { ...b, address: { ...b.address, line1: e.target.value } })} /></label>
+-          <label className="field"><span>{t.apply.locality}</span><input className="input" value={b.address.locality ?? ""} onChange={(e) => upd(i, { ...b, address: { ...b.address, locality: e.target.value } })} /></label>
+-          <label className="field"><span>{t.apply.city}</span><input className="input" value={b.address.city} onChange={(e) => upd(i, { ...b, address: { ...b.address, city: e.target.value } })} /></label>
+-          <label className="field"><span>{t.apply.state}</span><input className="input" value={b.address.state} onChange={(e) => upd(i, { ...b, address: { ...b.address, state: e.target.value } })} /></label>
+-          <label className="field"><span>{t.apply.pin}</span><input className="input" inputMode="numeric" maxLength={6} value={b.address.pin} onChange={(e) => upd(i, { ...b, address: { ...b.address, pin: e.target.value.replace(/\D/g, "") } })} /></label>
+-          <div className="sm:col-span-2 flex justify-between"><label className="flex items-center gap-3"><input type="checkbox" className="size-6 accent-[var(--color-teal-800)]" checked={b.active} onChange={(e) => upd(i, { ...b, active: e.target.checked })} />Active</label><button type="button" className="btn btn-sm btn-danger" onClick={() => setList(list.filter((_, j) => j !== i))}><Trash2 aria-hidden size={16} /></button></div>
+-        </fieldset>
+-      ))}
+-      <div className="flex gap-2 flex-wrap">
+-        <button className="btn btn-outline" onClick={() => setList([...list, { id: "", name: "", address: { line1: "", city: "", state: "", pin: "", country: "IN" }, active: true }])}><Plus aria-hidden size={16} />{t.branches.add}</button>
+-        <button className="btn btn-primary" onClick={async () => { setMsg(null); try { await api("partner/application", "PATCH", { branches: list }); setMsg({ tone: "ok", text: t.common.saved }); reloadApp(); } catch (e) { setMsg({ tone: "bad", text: (e as Error).message }); } }}>{t.branches.save}</button>
+-      </div>
+-      {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+-    </div>
+-  );
+-}
+diff --git a/app/calendar/page.tsx b/app/calendar/page.tsx
+deleted file mode 100644
+index 894ebdb..0000000
+--- a/app/calendar/page.tsx
++++ /dev/null
+@@ -1,43 +0,0 @@
+-"use client";
+-import { useState } from "react";
+-import Link from "next/link";
+-import { ChevronLeft, ChevronRight } from "lucide-react";
+-import { useData } from "@/lib/client";
+-import { dayLabel, timeOnly } from "@/lib/shared/format";
+-import { LoadFailure, Spinner, StatusBadge } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-import type { BookingRow } from "@/components/BookingCard";
+-
+-/** Week agenda: one column per day on desktop, a stacked list on phones. */
+-export default function CalendarPage() {
+-  const { t, locale } = usePartner();
+-  const [offset, setOffset] = useState(0);
+-  const base = new Date(Date.now() + 330 * 60000 + offset * 7 * 86400000);
+-  const days = Array.from({ length: 7 }, (_, i) => new Date(base.getTime() + i * 86400000).toISOString().slice(0, 10));
+-  const from = new Date(days[0] + "T00:00:00+05:30").toISOString(), to = new Date(new Date(days[6] + "T00:00:00+05:30").getTime() + 86400000).toISOString();
+-  const { data, error, reload } = useData<{ bookings: BookingRow[] }>(`partner/bookings?scope=all&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=200`);
+-  const byDay = (d: string) => (data?.bookings ?? []).filter((b) => new Date(new Date(b.start).getTime() + 330 * 60000).toISOString().slice(0, 10) === d && b.status !== "cancelled").sort((a, b) => a.start.localeCompare(b.start));
+-  return (
+-    <div className="grid gap-4">
+-      <div className="flex items-center gap-2"><h1 className="text-2xl mr-auto">{t.calendar.title}</h1>
+-        <button className="btn btn-sm btn-outline" aria-label={t.calendar.prev} onClick={() => setOffset(offset - 1)}><ChevronLeft aria-hidden size={18} /></button>
+-        <button className="btn btn-sm btn-outline" onClick={() => setOffset(0)}>{t.calendar.week}</button>
+-        <button className="btn btn-sm btn-outline" aria-label={t.calendar.next} onClick={() => setOffset(offset + 1)}><ChevronRight aria-hidden size={18} /></button>
+-      </div>
+-      {!data ? (error ? <LoadFailure message={error} onRetry={reload} /> : <Spinner label={t.common.loading} />) : (
+-        <div className="grid md:grid-cols-7 gap-2">
+-          {days.map((d) => { const l = dayLabel(d, locale); const list = byDay(d); return (
+-            <section key={d} className="panel p-3 grid gap-2 content-start md:min-h-64">
+-              <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-sans)" }}>{l.day} {l.num} {l.month}</h2>
+-              {list.length === 0 ? <p className="muted text-sm">{t.calendar.free}</p> : list.map((b) => (
+-                <Link key={b._id} href={`/bookings/${b._id}`} className="rounded-lg bg-[var(--color-teal-50)] p-2 grid gap-0.5 text-sm hover:bg-[var(--color-teal-100)]">
+-                  <span className="font-semibold tabular-nums">{timeOnly(b.start, locale)}–{timeOnly(b.end, locale)}</span><span className="truncate">{b.customerName}</span><span className="truncate muted">{b.serviceName}</span><StatusBadge status={b.status} label={t.status[b.status as keyof typeof t.status] ?? b.status} />
+-                </Link>
+-              ))}
+-            </section>
+-          ); })}
+-        </div>
+-      )}
+-    </div>
+-  );
+-}
+diff --git a/app/money/page.tsx b/app/money/page.tsx
+deleted file mode 100644
+index 4a683f2..0000000
+--- a/app/money/page.tsx
++++ /dev/null
+@@ -1,47 +0,0 @@
+-"use client";
+-import { useState } from "react";
+-import { useData } from "@/lib/client";
+-import { dateOnly, inr } from "@/lib/shared/format";
+-import { LoadFailure, Spinner, StatusBadge } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-
+-type Statement = { month: string; lines: { ref: string; date: string; service: string; servicePaise: number; commissionPaise: number; paidOnline: boolean }[]; penalties: { ref: string; penaltyPaise: number }[]; grossPaise: number; commissionPaise: number; penaltyPaise: number; netPaise: number };
+-type Prof = { plan?: { code: string; status: string; renewsAt?: string }; commissionPercent?: number; payouts: { _id: string; period: string; amountPaise: number; status: string; utr?: string }[]; plans: { _id: string; name: string; pricePaise?: number; interval?: string; benefits?: string[] }[]; onlinePayments: { id: string; amountPaise: number; refundedPaise: number; status: string; createdAt: string }[] };
+-
+-export default function MoneyPage() {
+-  const { t, locale } = usePartner();
+-  const [month, setMonth] = useState(new Date(Date.now() + 330 * 60000).toISOString().slice(0, 7));
+-  const statement = useData<Statement>(`partner/statements?month=${month}`);
+-  const profile = useData<Prof>("partner/profile");
+-  const st = statement.data;
+-  const prof = profile.data;
+-  return (
+-    <div className="grid gap-5">
+-      <h1 className="text-2xl">{t.money.title}</h1>
+-      <label className="field max-w-xs"><span>{t.money.month}</span><input type="month" className="input" value={month} onChange={(e) => setMonth(e.target.value)} /></label>
+-      {!st ? (statement.error ? <LoadFailure message={statement.error} onRetry={statement.reload} /> : <Spinner label={t.common.loading} />) : (
+-        <>
+-          <dl className="grid grid-cols-2 md:grid-cols-4 gap-3">
+-            {[[t.money.gross, st.grossPaise], [t.money.commission, -st.commissionPaise], [t.money.penalty, -st.penaltyPaise], [t.money.net, st.netPaise]].map(([l, v]) => <div key={String(l)} className="panel p-4"><dt className="muted">{l}</dt><dd className="text-xl font-semibold tabular-nums">{inr(Number(v), locale)}</dd></div>)}
+-          </dl>
+-          <section className="grid gap-2"><h2 className="text-lg">{t.money.lines} ({st.lines.length})</h2>
+-            {st.lines.length === 0 ? <p className="muted">{t.money.none}</p> : <div className="panel overflow-x-auto"><table className="w-full min-w-[30rem] text-left"><thead className="bg-[var(--color-ivory)] text-sm"><tr className="[&_th]:p-2"><th>Date</th><th>{t.bookings.service}</th><th className="text-right">₹</th><th className="text-right">{t.money.commission}</th></tr></thead>
+-              <tbody className="divide-y divide-[var(--color-line)]">{st.lines.map((l) => <tr key={l.ref} className="[&_td]:p-2"><td>{dateOnly(l.date, locale)}</td><td>{l.service} <span className="muted text-sm">{l.ref}</span></td><td className="text-right tabular-nums">{inr(l.servicePaise, locale)}</td><td className="text-right tabular-nums">{inr(l.commissionPaise, locale)}</td></tr>)}</tbody></table></div>}
+-          </section>
+-        </>
+-      )}
+-      {profile.error && !prof && <LoadFailure message={profile.error} onRetry={profile.reload} />}
+-      {prof && (
+-        <>
+-          <section className="panel p-4 grid gap-1"><h2 className="text-lg">{t.money.plan}</h2><p>{prof.plan?.code ?? "free"} · {prof.plan?.status ?? "none"}{prof.commissionPercent !== undefined ? ` · ${prof.commissionPercent}%` : ""}</p>{prof.plans.length > 0 && <ul className="muted text-[0.95rem]">{prof.plans.map((x) => <li key={x._id}>{x.name}: {inr(x.pricePaise, locale)} / {x.interval}</li>)}</ul>}</section>
+-          <section className="grid gap-2"><h2 className="text-lg">{t.money.payouts}</h2>
+-            {prof.payouts.length === 0 ? <p className="muted">{t.money.noPayouts}</p> : <ul className="panel divide-y divide-[var(--color-line)]">{prof.payouts.map((x) => <li key={x._id} className="p-3 flex gap-3"><span className="flex-1">{x.period}{x.utr ? <span className="muted text-sm"> · {x.utr}</span> : null}</span><span className="tabular-nums">{inr(x.amountPaise, locale)}</span><StatusBadge status={x.status} /></li>)}</ul>}
+-          </section>
+-          <section className="grid gap-2"><h2 className="text-lg">{t.money.online}</h2>
+-            {prof.onlinePayments.length === 0 ? <p className="muted">—</p> : <ul className="panel divide-y divide-[var(--color-line)]">{prof.onlinePayments.slice(0, 30).map((x) => <li key={x.id} className="p-3 flex gap-3"><span className="flex-1">{dateOnly(x.createdAt, locale)}</span><span className="tabular-nums">{inr(x.amountPaise - x.refundedPaise, locale)}</span><StatusBadge status={x.status} /></li>)}</ul>}
+-          </section>
+-        </>
+-      )}
+-    </div>
+-  );
+-}
+diff --git a/app/more/page.tsx b/app/more/page.tsx
+deleted file mode 100644
+index 6a31fa4..0000000
+--- a/app/more/page.tsx
++++ /dev/null
+@@ -1,53 +0,0 @@
+-"use client";
+-
+-import Link from "next/link";
+-import {
+-  ArrowUpRight, Bell, Building2, Clock3, FileText, Image as ImageIcon,
+-  LifeBuoy, MapPin, QrCode, Settings, Star, Users, Wallet,
+-} from "lucide-react";
+-import { usePartner } from "@/components/Partner";
+-
+-export default function MorePage() {
+-  const { t, has, app, locale } = usePartner();
+-  const isHindi = locale === "hi";
+-  const items = [
+-    { href: "/application", label: t.nav.application, desc: isHindi ? "अपने आवेदन की स्थिति और जानकारी" : "Application status and business details", Icon: FileText, show: true, group: "Business setup" },
+-    { href: "/staff", label: t.nav.staff, desc: isHindi ? "टीम और सेवा असाइनमेंट" : "Your team and service assignments", Icon: Users, show: has("staff") && app?.application?.kind === "business", group: "Business setup" },
+-    { href: "/schedule", label: t.nav.schedule, desc: isHindi ? "काम के घंटे, छुट्टियाँ और ब्लॉक समय" : "Working hours, holidays and blocked time", Icon: Clock3, show: true, group: "Business setup" },
+-    { href: "/branches", label: t.nav.branches, desc: isHindi ? "अपनी अलग-अलग शाखाएँ संभालें" : "Manage your business locations", Icon: Building2, show: has("branches") && app?.application?.kind === "business", group: "Business setup" },
+-    { href: "/application", label: t.nav.area, desc: isHindi ? "घर पर सेवा के लिए PIN कोड" : "PIN codes and travel settings for home visits", Icon: MapPin, show: has("atHome"), group: "Business setup" },
+-    { href: "/profile", label: t.nav.gallery, desc: isHindi ? "बिज़नेस फोटो और सार्वजनिक प्रोफ़ाइल" : "Business photos and public profile", Icon: ImageIcon, show: true, group: "Grow your business" },
+-    { href: "/reviews", label: t.nav.reviews, desc: isHindi ? "ग्राहकों की प्रतिक्रिया देखें" : "Read feedback from completed bookings", Icon: Star, show: true, group: "Grow your business" },
+-    { href: "/promote", label: t.nav.promote, desc: isHindi ? "बुकिंग QR कोड और पोस्टर" : "Booking QR codes and promotional posters", Icon: QrCode, show: true, group: "Grow your business" },
+-    { href: "/money", label: t.nav.money, desc: isHindi ? "कमाई, कमीशन और स्टेटमेंट" : "Earnings, commission and statements", Icon: Wallet, show: true, group: "Grow your business" },
+-    { href: "/notifications", label: t.nav.notifications, desc: isHindi ? "बुकिंग और सिस्टम अपडेट" : "Booking and platform updates", Icon: Bell, show: true, group: "Account & support" },
+-    { href: "/support", label: t.nav.support, desc: isHindi ? "मदद और सहायता अनुरोध" : "Get help with your Partner account", Icon: LifeBuoy, show: true, group: "Account & support" },
+-    { href: "/settings", label: t.nav.settings, desc: isHindi ? "भाषा, पासवर्ड और अकाउंट सेटिंग्स" : "Language, password and account settings", Icon: Settings, show: true, group: "Account & support" },
+-  ].filter((item) => item.show);
+-  const groups = ["Business setup", "Grow your business", "Account & support"];
+-
+-  return (
+-    <div className="grid gap-6">
+-      <header className="partner-more-hero">
+-        <span className="partner-kicker">SAJ SAATHI PARTNER</span>
+-        <h1>{isHindi ? "अपने बिज़नेस को संभालें" : "Everything for your business"}</h1>
+-        <p>{isHindi ? "अपने रोज़ के काम, टीम, कमाई और अकाउंट को एक ही जगह से मैनेज करें।" : "Manage your day-to-day work, team, earnings and account from one simple place."}</p>
+-      </header>
+-      {groups.map((group) => {
+-        const rows = items.filter((item) => item.group === group);
+-        if (!rows.length) return null;
+-        return <section key={group} className="grid gap-3">
+-          <h2 className="partner-more-heading">{group}</h2>
+-          <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+-            {rows.map(({ href, label, desc, Icon }) => <Link href={href} key={`${href}-${label}`} className="partner-more-card">
+-              <span className="partner-more-icon"><Icon size={21} aria-hidden /></span>
+-              <span className="partner-more-copy"><strong>{label}</strong><small>{desc}</small></span>
+-              <ArrowUpRight className="partner-more-arrow" size={17} aria-hidden />
+-            </Link>)}
+-          </div>
+-        </section>;
+-      })}
+-      <section className="partner-more-support"><span className="partner-more-support-icon"><LifeBuoy size={22} /></span><div><strong>{isHindi ? "सहायता चाहिए?" : "Need a hand?"}</strong><p>{isHindi ? "हमारी सहायता टीम आपके पार्टनर अकाउंट और बुकिंग से जुड़े सवालों में मदद कर सकती है।" : "Our support team can help with your Partner account, bookings and setup questions."}</p></div><Link className="btn btn-outline btn-sm" href="/support">{isHindi ? "सहायता खोलें" : "Get support"} <ArrowUpRight size={15} /></Link></section>
+-    </div>
+-  );
+-}
+diff --git a/app/notifications/page.tsx b/app/notifications/page.tsx
+deleted file mode 100644
+index 492ace9..0000000
+--- a/app/notifications/page.tsx
++++ /dev/null
+@@ -1,20 +0,0 @@
+-"use client";
+-import Link from "next/link";
+-import { api, useData } from "@/lib/client";
+-import { dateTime } from "@/lib/shared/format";
+-import { Empty, LoadFailure, Spinner } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-
+-type N = { _id: string; title: string; body: string; link?: string; read: boolean; createdAt: string };
+-export default function NotificationsPage() {
+-  const { t, locale } = usePartner();
+-  const { data, error, reload } = useData<{ notifications: N[]; unread: number }>("me/notifications");
+-  if (!data) return error ? <LoadFailure message={error} onRetry={reload} /> : <Spinner label={t.common.loading} />;
+-  return (
+-    <div className="grid gap-4"><div className="flex items-center gap-3"><h1 className="text-2xl mr-auto">{t.nav.notifications}</h1>{data.unread > 0 && <button className="btn btn-sm btn-outline" onClick={async () => { await api("me/notifications", "PATCH", { all: true }); reload(); }}>✓</button>}</div>
+-      {data.notifications.length === 0 ? <Empty title="—" /> : <ul className="panel divide-y divide-[var(--color-line)]">{data.notifications.map((n) => (
+-        <li key={n._id} className={`p-4 grid gap-1 ${n.read ? "" : "bg-[var(--color-teal-50)]"}`}><p className="font-semibold">{n.title}</p><p>{n.body}</p><p className="muted text-sm">{dateTime(n.createdAt, locale)}{n.link && <> · <Link className="underline" href={n.link}>Open</Link></>}</p></li>
+-      ))}</ul>}
+-    </div>
+-  );
+-}
+diff --git a/app/page.tsx b/app/page.tsx
+deleted file mode 100644
+index 8c9e086..0000000
+--- a/app/page.tsx
++++ /dev/null
+@@ -1,116 +0,0 @@
+-"use client";
+-
+-import Link from "next/link";
+-import {
+-  ArrowUpRight, Ban, Bell, CalendarClock, CheckCircle2, Clock3,
+-  Plus, Scissors, Star, Users, Wallet, type LucideIcon,
+-} from "lucide-react";
+-import { useData } from "@/lib/client";
+-import { inr } from "@/lib/shared/format";
+-import { Empty, Spinner } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-import { BookingCard, type BookingRow } from "@/components/BookingCard";
+-
+-type Dash = {
+-  provider: { name: string; status: string; ratingAvg: number; ratingCount: number };
+-  today: BookingRow[];
+-  counts: { today: number; pending: number; upcoming: number; completedMonth: number; cancelledMonth: number };
+-  revenueMonthPaise: number;
+-  commissionMonthPaise: number;
+-  unreadNotifications: number;
+-};
+-
+-function StatCard({ label, value, href, Icon, tone = "default" }: {
+-  label: string;
+-  value: string | number;
+-  href: string;
+-  Icon: LucideIcon;
+-  tone?: "default" | "warm";
+-}) {
+-  return <Link href={href} className={`partner-stat-card ${tone === "warm" ? "is-warm" : ""}`}>
+-    <span className="partner-stat-icon"><Icon size={19} aria-hidden /></span>
+-    <span className="partner-stat-value">{value}</span>
+-    <span className="partner-stat-label">{label}</span>
+-    <ArrowUpRight className="partner-stat-arrow" size={16} aria-hidden />
+-  </Link>;
+-}
+-
+-export default function Dashboard() {
+-  const { t, locale, app, appLoading, appError, reloadApp, has } = usePartner();
+-  const hasApp = !!app?.application;
+-  const { data, loading, error, reload } = useData<Dash>(hasApp ? "partner/dashboard" : null);
+-  const isHindi = locale === "hi";
+-
+-  if (appLoading && !app) return <div className="panel p-6"><Spinner label={t.common.loading} /></div>;
+-  if (appError && !app) return <section className="partner-onboarding-hero"><span className="partner-kicker">SAJ SAATHI PARTNER</span><h1>{isHindi ? "आपका पार्टनर वर्कस्पेस" : "Your partner workspace"}</h1><p>{appError}</p><a className="btn btn-primary" href="/api/health" target="_blank" rel="noreferrer">{isHindi ? "कनेक्शन जाँचें" : "Check connection"}</a><button className="btn btn-outline" onClick={reloadApp}>{isHindi ? "फिर प्रयास करें" : "Try again"}</button></section>;
+-
+-  if (app && !hasApp) return <section className="partner-onboarding-hero">
+-    <span className="partner-kicker">SAJ SAATHI PARTNER NETWORK</span>
+-    <h1>{isHindi ? "आपका काम, अब और आसान।" : "Your business, made easier."}</h1>
+-    <p>{isHindi ? "ग्राहकों से जुड़ें, सेवाएँ जोड़ें और अपना पार्टनर आवेदन पूरा करें।" : "Connect with customers, add your services and complete your Partner application to get started."}</p>
+-    <div className="partner-onboarding-points"><span><CheckCircle2 size={17} /> {isHindi ? "एक जगह बिज़नेस जानकारी" : "One place for business details"}</span><span><CalendarClock size={17} /> {isHindi ? "बुकिंग और समय प्रबंधन" : "Bookings and schedule management"}</span><span><Wallet size={17} /> {isHindi ? "कमाई का रिकॉर्ड" : "Earnings records"}</span></div>
+-    <Link className="btn btn-primary btn-xl" href="/application">{t.apply.start} <ArrowUpRight size={18} /></Link>
+-  </section>;
+-
+-  if (!data && loading) return <div className="grid gap-4"><div className="partner-dashboard-skeleton" /><div className="grid grid-cols-2 lg:grid-cols-4 gap-3">{[1, 2, 3, 4].map((x) => <div key={x} className="partner-stat-skeleton" />)}</div><Spinner label={t.common.loading} /></div>;
+-  if (!data) return <section className="partner-empty-error"><div className="partner-empty-icon"><CalendarClock size={25} /></div><h1>{isHindi ? "डैशबोर्ड लोड नहीं हो पाया" : "Your dashboard could not load"}</h1><p>{error || t.common.error}</p><div className="flex flex-wrap gap-2 justify-center"><button type="button" className="btn btn-primary" onClick={reload}>{isHindi ? "फिर प्रयास करें" : "Try again"}</button><a className="btn btn-outline" href="/api/health" target="_blank" rel="noreferrer">{isHindi ? "कनेक्शन जाँचें" : "Check connection"}</a></div></section>;
+-
+-  const statCards = [
+-    { label: t.home.pending, value: data.counts.pending, href: "/bookings?tab=pending", Icon: Clock3 },
+-    { label: t.home.upcoming, value: data.counts.upcoming, href: "/bookings?tab=upcoming", Icon: CalendarClock },
+-    { label: t.home.completedMonth, value: data.counts.completedMonth, href: "/bookings?tab=completed", Icon: CheckCircle2 },
+-    { label: t.home.cancelledMonth, value: data.counts.cancelledMonth, href: "/bookings?tab=cancelled", Icon: Ban },
+-  ];
+-
+-  return (
+-    <div className="partner-dashboard">
+-      <section className="partner-dashboard-hero">
+-        <div className="partner-dashboard-hero-copy">
+-          <span className="partner-kicker">{isHindi ? "आपका बिज़नेस डैशबोर्ड" : "YOUR BUSINESS AT A GLANCE"}</span>
+-          <h1>{t.home.greeting}, {data.provider.name}</h1>
+-          <p>{isHindi ? "आज की बुकिंग और अपने बिज़नेस की गतिविधि यहाँ देखें।" : "Your bookings, services and business activity — organised in one place."}</p>
+-          {data.provider.status !== "approved" && <div className="partner-live-note"><span className="partner-live-dot" />{t.home.notLive} <Link href="/application">{t.nav.application}</Link></div>}
+-        </div>
+-        <div className="partner-dashboard-hero-art" aria-hidden="true"><div className="partner-art-ring" /><div className="partner-art-card"><Scissors size={25} /><span>SAJ<br />SAATHI</span></div><div className="partner-art-spark">✦</div></div>
+-      </section>
+-
+-      <section className="partner-section-block">
+-        <div className="partner-section-heading"><div><span className="partner-kicker">{isHindi ? "आज की स्थिति" : "TODAY & THIS MONTH"}</span><h2>{isHindi ? "बिज़नेस की झलक" : "Business overview"}</h2></div><Link href="/bookings" className="partner-text-link">{t.home.seeAll} <ArrowUpRight size={15} /></Link></div>
+-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">{statCards.map((card) => <StatCard key={card.href} {...card} />)}</div>
+-      </section>
+-
+-      <section className="grid lg:grid-cols-[1.25fr_.75fr] gap-4">
+-        <div className="partner-revenue-card">
+-          <div className="partner-revenue-top"><span>{t.home.revenue}</span><span className="partner-revenue-icon"><Wallet size={19} /></span></div>
+-          <strong>{inr(data.revenueMonthPaise, locale)}</strong>
+-          <p>{isHindi ? "इस महीने का रिकॉर्ड किया गया कुल बिज़नेस मूल्य" : "Recorded service value for the current month"}</p>
+-          <div className="partner-revenue-meta"><span>{t.home.commission}</span><b>{inr(data.commissionMonthPaise, locale)}</b><Link href="/money">{isHindi ? "विवरण देखें" : "View statement"} <ArrowUpRight size={14} /></Link></div>
+-        </div>
+-        <div className="partner-rating-card">
+-          <div className="partner-rating-card-icon"><Star size={20} /></div>
+-          <span className="partner-rating-label">{t.home.rating}</span>
+-          <strong>{data.provider.ratingCount ? data.provider.ratingAvg.toFixed(1) : "—"}<small>/ 5</small></strong>
+-          <p>{data.provider.ratingCount ? `${data.provider.ratingCount} ${isHindi ? "ग्राहक समीक्षाएँ" : "customer reviews"}` : (isHindi ? "बुकिंग पूरी होने पर समीक्षाएँ यहाँ दिखेंगी।" : "Reviews will appear here after completed bookings.")}</p>
+-          <Link href="/reviews">{isHindi ? "समीक्षाएँ देखें" : "View reviews"} <ArrowUpRight size={14} /></Link>
+-        </div>
+-      </section>
+-
+-      <section className="partner-section-block">
+-        <div className="partner-section-heading"><div><span className="partner-kicker">{isHindi ? "तेज़ पहुँच" : "QUICK ACCESS"}</span><h2>{t.home.quick}</h2></div></div>
+-        <div className="partner-quick-grid">
+-          <Link href="/bookings/new" className="partner-quick-card"><span><Plus size={20} /></span><strong>{t.home.addWalkIn}</strong><small>{isHindi ? "फोन या दुकान पर आई बुकिंग जोड़ें" : "Add an in-person customer booking"}<ArrowUpRight size={14} /></small></Link>
+-          <Link href="/schedule#blocks" className="partner-quick-card"><span><Ban size={20} /></span><strong>{t.home.blockTime}</strong><small>{isHindi ? "व्यस्त समय या छुट्टी रोकें" : "Mark time as unavailable"}<ArrowUpRight size={14} /></small></Link>
+-          <Link href="/services" className="partner-quick-card"><span><Scissors size={20} /></span><strong>{t.nav.services}</strong><small>{isHindi ? "सेवाएँ और कीमतें अपडेट करें" : "Update services and prices"}<ArrowUpRight size={14} /></small></Link>
+-          {has("staff") && app?.application?.kind === "business" && <Link href="/staff" className="partner-quick-card"><span><Users size={20} /></span><strong>{t.nav.staff}</strong><small>{isHindi ? "टीम और सेवा असाइनमेंट देखें" : "Manage your team and assignments"}<ArrowUpRight size={14} /></small></Link>}
+-        </div>
+-      </section>
+-
+-      <section className="partner-section-block">
+-        <div className="partner-section-heading"><div><span className="partner-kicker">{isHindi ? "अपॉइंटमेंट" : "APPOINTMENTS"}</span><h2>{t.home.today} <span className="partner-count-pill">{data.counts.today}</span></h2></div><Link className="partner-text-link" href="/bookings?tab=today">{t.home.seeAll} <ArrowUpRight size={15} /></Link></div>
+-        {data.today.length === 0 ? <Empty title={t.home.none} body={isHindi ? "नई बुकिंग आने पर वे यहाँ दिखाई देंगी।" : "New bookings will appear here when customers book your services."} action={<Link className="btn btn-outline btn-sm" href="/calendar">{isHindi ? "कैलेंडर देखें" : "Open calendar"}</Link>} /> : <ul className="grid gap-3">{data.today.map((booking) => <BookingCard key={booking._id} b={booking} onChange={reload} />)}</ul>}
+-      </section>
+-
+-      {data.unreadNotifications > 0 && <Link href="/notifications" className="partner-notification-strip"><Bell size={18} /><span>{isHindi ? `${data.unreadNotifications} नई सूचनाएँ हैं` : `You have ${data.unreadNotifications} unread notifications`}</span><ArrowUpRight size={16} /></Link>}
+-    </div>
+-  );
+-}
+diff --git a/app/profile/page.tsx b/app/profile/page.tsx
+deleted file mode 100644
+index 1706f4e..0000000
+--- a/app/profile/page.tsx
++++ /dev/null
+@@ -1,34 +0,0 @@
+-"use client";
+-import Link from "next/link";
+-import Image from "next/image";
+-import { ExternalLink, Trash2 } from "lucide-react";
+-import { api, proxyUrl } from "@/lib/client";
+-import { BRAND } from "@/lib/shared/brand";
+-import { LoadFailure, Notice, Spinner } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-import { Upload } from "@/components/Upload";
+-
+-/** Public-facing profile: photos here, text/address/home-visit area on the application screen. */
+-export default function ProfilePage() {
+-  const { t, app, appError, appLoading, reloadApp, approved } = usePartner();
+-  const p = app?.application;
+-  if (!p) {
+-    if (appError) return <LoadFailure message={appError} onRetry={reloadApp} title="Your business profile could not be loaded." />;
+-    if (appLoading) return <Spinner label={t.common.loading} />;
+-    return <div className="grid gap-3"><Notice tone="info">Create your Partner application to set up your public business profile.</Notice><Link className="btn btn-primary justify-self-start" href="/application">Open application</Link></div>;
+-  }
+-  return (
+-    <div className="grid gap-5">
+-      <h1 className="text-2xl">{t.profile.title}</h1>
+-      {approved && <a className="btn btn-outline justify-self-start" href={`${BRAND.urls.customer}/p/${p.slug}`} target="_blank" rel="noreferrer"><ExternalLink aria-hidden size={16} />{t.profile.publicLink}</a>}
+-      <section className="panel p-4 grid gap-2"><p>{p.about || "—"}</p><p className="muted">{[p.address.line1, p.address.locality, p.address.city, p.address.pin].filter(Boolean).join(", ")}</p><Link className="underline" href="/application">{t.apply.details} / {t.nav.area}</Link></section>
+-      <section className="panel p-4 grid gap-3">
+-        <h2 className="text-lg">{t.profile.photos} ({p.gallery.length}/24)</h2>
+-        <Upload endpoint="partner/gallery" accept="image/jpeg,image/png,image/webp" label={t.profile.addPhoto} onDone={reloadApp} />
+-        <ul className="grid grid-cols-3 sm:grid-cols-4 gap-2">{p.gallery.map((g) => (
+-          <li key={g.url} className="relative"><Image unoptimized width={480} height={480} src={proxyUrl(g.url)} alt={g.caption ?? ""} className="aspect-square object-cover rounded-lg w-full" /><button aria-label={t.profile.removePhoto} className="absolute top-1 right-1 btn btn-sm btn-danger !min-h-8 !px-2" onClick={async () => { await api("partner/gallery", "DELETE", { url: g.url }); reloadApp(); }}><Trash2 aria-hidden size={14} /></button></li>
+-        ))}</ul>
+-      </section>
+-    </div>
+-  );
+-}
+diff --git a/app/promote/page.tsx b/app/promote/page.tsx
+deleted file mode 100644
+index 42fbe15..0000000
+--- a/app/promote/page.tsx
++++ /dev/null
+@@ -1,105 +0,0 @@
+-"use client";
+-import { useEffect, useMemo, useState } from "react";
+-import QRCode from "qrcode";
+-import { Download, Printer } from "lucide-react";
+-import NextImage from "next/image";
+-import type { Service } from "@/lib/core/types";
+-import { useData } from "@/lib/client";
+-import { BRAND } from "@/lib/shared/brand";
+-import { inr } from "@/lib/shared/format";
+-import { LoadFailure, Notice, Spinner } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-
+-type Format = "a4" | "square" | "story" | "whatsapp" | "menu" | "qr";
+-const SIZES: Record<Format, [number, number]> = { a4: [2480, 3508], square: [1080, 1080], story: [1080, 1920], whatsapp: [1080, 1350], menu: [1240, 1754], qr: [1200, 1200] };
+-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+-const toB64 = (s: string) => btoa(unescape(encodeURIComponent(s)));
+-
+-/**
+- * Posters are built as SVG from the partner's genuine, approved details and the official logo,
+- * then exported to PNG in the browser (no server rendering, works on low-end phones).
+- */
+-export default function PromotePage() {
+-  const { t, app, approved, locale } = usePartner();
+-  const p = app?.application;
+-  const { data: serviceData, error: serviceError, reload: reloadServices } = useData<{ services: Service[] }>(p ? "partner/services" : null);
+-  const services = useMemo(() => serviceData?.services.filter((s) => s.active) ?? [], [serviceData?.services]);
+-  const [format, setFormat] = useState<Format>("a4");
+-  const [branch, setBranch] = useState("");
+-  const [qrSvg, setQrSvg] = useState("");
+-  const [logo, setLogo] = useState("");
+-  const url = p ? `${BRAND.urls.customer}/book/${p.slug}?src=qr${branch ? `&branch=${branch}` : ""}` : "";
+-  useEffect(() => { if (url) QRCode.toString(url, { type: "svg", margin: 0, errorCorrectionLevel: "M", color: { dark: "#102B28", light: "#FFFFFF" } }).then(setQrSvg); }, [url]);
+-  useEffect(() => { fetch(BRAND.logo.onDark).then((r) => r.text()).then(setLogo); }, []);
+-
+-  const svg = useMemo(() => {
+-    if (!p || !qrSvg || !logo) return "";
+-    const [W, H] = SIZES[format];
+-    const u = W / 1080; // scale unit
+-    const qrData = `data:image/svg+xml;base64,${toB64(qrSvg)}`;
+-    const logoData = `data:image/svg+xml;base64,${toB64(logo)}`;
+-    const name = esc(p.businessName);
+-    const place = esc([p.address.locality, p.address.city].filter(Boolean).join(", "));
+-    const branchName = branch ? esc(p.branches.find((b) => b.id === branch)?.name ?? "") : "";
+-    const scan = esc(t.promote.scan);
+-    const serif = "Georgia, 'Noto Serif Devanagari', serif", sans = "Arial, 'Noto Sans Devanagari', sans-serif";
+-    if (format === "qr") {
+-      return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="100%" height="100%" fill="#fff"/><image href="${qrData}" x="${W * 0.1}" y="${H * 0.08}" width="${W * 0.8}" height="${W * 0.8}"/><text x="${W / 2}" y="${H * 0.96}" font-family="${sans}" font-size="${40 * u}" text-anchor="middle" fill="#102B28">${name}</text></svg>`;
+-    }
+-    const lines = format === "menu" ? services.slice(0, 14) : services.slice(0, format === "a4" ? 6 : format === "story" ? 5 : 3);
+-    const qrSize = (format === "story" ? 520 : format === "a4" ? 1150 : format === "menu" ? 330 : 420) * (format === "a4" ? 1 : u);
+-    let y = 0; const parts: string[] = [];
+-    parts.push(`<rect width="${W}" height="${H}" fill="#183F3A"/>`);
+-    parts.push(`<rect x="${40 * u}" y="${40 * u}" width="${W - 80 * u}" height="${H - 80 * u}" rx="${28 * u}" fill="none" stroke="#D9B77C" stroke-width="${3 * u}"/>`);
+-    parts.push(`<image href="${logoData}" x="${(W - 640 * u) / 2}" y="${90 * u}" width="${640 * u}" height="${180 * u}"/>`);
+-    y = 380 * u;
+-    parts.push(`<text x="${W / 2}" y="${y}" font-family="${serif}" font-size="${(name.length > 22 ? 64 : 82) * u}" font-weight="600" text-anchor="middle" fill="#F7F5EF">${name}</text>`);
+-    y += 70 * u;
+-    if (place) parts.push(`<text x="${W / 2}" y="${y}" font-family="${sans}" font-size="${38 * u}" text-anchor="middle" fill="#D9B77C">${place}${branchName ? ` · ${branchName}` : ""}</text>`);
+-    y += 80 * u;
+-    const lineH = (format === "menu" ? 64 : 60) * u;
+-    for (const s of lines) {
+-      parts.push(`<text x="${110 * u}" y="${y}" font-family="${sans}" font-size="${36 * u}" fill="#F7F5EF">${esc(s.name.slice(0, 34))}</text>`);
+-      parts.push(`<text x="${W - 110 * u}" y="${y}" font-family="${sans}" font-size="${36 * u}" font-weight="700" text-anchor="end" fill="#F7F5EF">${esc(inr(s.pricePaise, locale))}</text>`);
+-      parts.push(`<line x1="${110 * u}" x2="${W - 110 * u}" y1="${y + 18 * u}" y2="${y + 18 * u}" stroke="#ffffff" stroke-opacity="0.15" stroke-width="${2 * u}"/>`);
+-      y += lineH;
+-    }
+-    const qy = Math.max(y + 40 * u, H - qrSize - 260 * u);
+-    parts.push(`<rect x="${(W - qrSize) / 2 - 30 * u}" y="${qy - 30 * u}" width="${qrSize + 60 * u}" height="${qrSize + 60 * u}" rx="${24 * u}" fill="#fff"/>`);
+-    parts.push(`<image href="${qrData}" x="${(W - qrSize) / 2}" y="${qy}" width="${qrSize}" height="${qrSize}"/>`);
+-    parts.push(`<text x="${W / 2}" y="${qy + qrSize + 110 * u}" font-family="${serif}" font-size="${50 * u}" text-anchor="middle" fill="#F7F5EF">${scan}</text>`);
+-    parts.push(`<text x="${W / 2}" y="${H - 80 * u}" font-family="${sans}" font-size="${28 * u}" text-anchor="middle" fill="#D9B77C">${esc(BRAND.urls.customer.replace(/^https?:\/\//, ""))}</text>`);
+-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${parts.join("")}</svg>`;
+-  }, [p, qrSvg, logo, format, services, branch, t, locale]);
+-
+-  if (!p) return <Spinner label={t.common.loading} />;
+-  if (!approved) return <div className="grid gap-4"><h1 className="text-2xl">{t.promote.title}</h1><Notice tone="warn">{t.promote.notApproved}</Notice></div>;
+-
+-  const download = async () => {
+-    const [W, H] = SIZES[format];
+-    const img = new Image();
+-    img.src = `data:image/svg+xml;base64,${toB64(svg)}`;
+-    await img.decode();
+-    const c = document.createElement("canvas"); c.width = W; c.height = H;
+-    c.getContext("2d")!.drawImage(img, 0, 0, W, H);
+-    const a = document.createElement("a"); a.download = `saj-saathi-${p.slug}-${format}.png`; a.href = c.toDataURL("image/png"); a.click();
+-  };
+-  const print = () => {
+-    const w = window.open("", "_blank"); if (!w) return;
+-    w.document.write(`<!doctype html><title>${esc(p.businessName)}</title><style>@page{size:A4;margin:0}body{margin:0}svg{width:210mm;height:297mm;display:block}</style>${svg}<script>onload=()=>print()<\/script>`);
+-    w.document.close();
+-  };
+-  const labels: Record<Format, string> = { a4: t.promote.a4, square: t.promote.square, story: t.promote.story, whatsapp: t.promote.whatsapp, menu: t.promote.menu, qr: t.promote.qrOnly };
+-  return (
+-    <div className="grid gap-4">
+-      <h1 className="text-2xl">{t.promote.title}</h1>
+-      <p className="muted">{t.promote.hint}</p>
+-      {serviceError && <LoadFailure message={serviceError} onRetry={reloadServices} />}
+-      <nav className="flex flex-wrap gap-2">{(Object.keys(SIZES) as Format[]).map((f) => <button key={f} className="chip" aria-pressed={f === format} onClick={() => setFormat(f)}>{labels[f]}</button>)}</nav>
+-      {p.branches.length > 0 && <label className="field max-w-xs"><span>{t.promote.branch}</span><select className="input" value={branch} onChange={(e) => setBranch(e.target.value)}><option value="">{p.businessName}</option>{p.branches.filter((b) => b.active).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>}
+-      {svg ? <div className="panel p-3 grid place-items-center bg-[var(--color-sand)]"><NextImage unoptimized alt={labels[format]} src={`data:image/svg+xml;base64,${toB64(svg)}`} width={SIZES[format][0]} height={SIZES[format][1]} className="max-h-[60vh] w-auto shadow" /></div> : <Spinner label={t.common.loading} />}
+-      <p className="text-sm muted break-all">{url}</p>
+-      <div className="flex gap-2 flex-wrap"><button className="btn btn-primary" disabled={!svg} onClick={download}><Download aria-hidden size={18} />{t.promote.download}</button>{(format === "a4" || format === "menu") && <button className="btn btn-outline" disabled={!svg} onClick={print}><Printer aria-hidden size={18} />{t.promote.print}</button>}</div>
+-    </div>
+-  );
+-}
+diff --git a/app/reviews/page.tsx b/app/reviews/page.tsx
+deleted file mode 100644
+index 80cbc80..0000000
+--- a/app/reviews/page.tsx
++++ /dev/null
+@@ -1,25 +0,0 @@
+-"use client";
+-import type { Review } from "@/lib/core/types";
+-import { api, useData } from "@/lib/client";
+-import { dateOnly } from "@/lib/shared/format";
+-import { Empty, LoadFailure, Spinner, Stars } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-
+-export default function ReviewsPage() {
+-  const { t, locale } = usePartner();
+-  const { data, error, reload } = useData<{ reviews: Review[] }>("partner/reviews");
+-  if (!data) return error ? <LoadFailure message={error} onRetry={reload} /> : <Spinner label={t.common.loading} />;
+-  return (
+-    <div className="grid gap-4"><h1 className="text-2xl">{t.reviews.title}</h1>
+-      {data.reviews.length === 0 ? <Empty title={t.reviews.empty} /> : <ul className="grid gap-3">{data.reviews.map((r) => (
+-        <li key={r._id} className="panel p-4 grid gap-2">
+-          <div className="flex gap-3 items-center"><Stars value={r.rating} count={1} /><span className="font-semibold">{r.customerName.split(" ")[0]}</span><span className="muted text-sm">{dateOnly(r.createdAt, locale)}</span></div>
+-          {r.text && <p>{r.text}</p>}
+-          {r.reply ? <p className="pl-3 border-l-2 border-[var(--color-gold)]">{r.reply.text}</p> : (
+-            <form className="flex gap-2" onSubmit={async (e) => { e.preventDefault(); await api(`partner/reviews/${r._id}`, "POST", { text: new FormData(e.currentTarget).get("text") }); reload(); }}><input name="text" className="input" required minLength={2} maxLength={600} placeholder={t.reviews.reply} /><button className="btn btn-outline">{t.reviews.send}</button></form>
+-          )}
+-        </li>
+-      ))}</ul>}
+-    </div>
+-  );
+-}
+diff --git a/app/schedule/page.tsx b/app/schedule/page.tsx
+deleted file mode 100644
+index 4387540..0000000
+--- a/app/schedule/page.tsx
++++ /dev/null
+@@ -1,65 +0,0 @@
+-"use client";
+-import { useEffect, useState } from "react";
+-import Link from "next/link";
+-import { Plus, Trash2 } from "lucide-react";
+-import type { WeeklyHours } from "@/lib/core/types";
+-import { api, useData } from "@/lib/client";
+-import { dateOnly, dateTime } from "@/lib/shared/format";
+-import { LoadFailure, Notice, Spinner } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-
+-const ORDER = ["1", "2", "3", "4", "5", "6", "0"] as const;
+-
+-export default function SchedulePage() {
+-  const { t, app, appError, appLoading, reloadApp, locale } = usePartner();
+-  const p = app?.application;
+-  const [hours, setHours] = useState<WeeklyHours | null>(null);
+-  const [holidays, setHolidays] = useState<string[]>([]);
+-  const [msg, setMsg] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+-  const blocks = useData<{ blocks: { _id: string; start: string; end: string; reason?: string }[] }>(p ? "partner/blocks" : null);
+-  useEffect(() => { if (p) { setHours(p.hours); setHolidays(p.holidays); } }, [p]);
+-  if (!p || !hours) {
+-    if (appError) return <LoadFailure message={appError} onRetry={reloadApp} />;
+-    if (appLoading || (p && !hours)) return <Spinner label={t.common.loading} />;
+-    return <div className="grid gap-3"><Notice tone="info">Complete your partner application before setting business hours.</Notice><Link className="btn btn-primary justify-self-start" href="/application">Open application</Link></div>;
+-  }
+-  const setDay = (d: (typeof ORDER)[number], patch: Partial<{ open: boolean; start: string; end: string }>) => {
+-    const cur = hours[d]; const slot = cur.slots[0] ?? { start: "10:00", end: "19:00" };
+-    setHours({ ...hours, [d]: { open: patch.open ?? cur.open, slots: [{ start: patch.start ?? slot.start, end: patch.end ?? slot.end }] } });
+-  };
+-  const run = async (fn: () => Promise<unknown>) => { setMsg(null); try { await fn(); setMsg({ tone: "ok", text: t.common.saved }); reloadApp(); } catch (e) { setMsg({ tone: "bad", text: (e as Error).message }); } };
+-  return (
+-    <div className="grid gap-6">
+-      <h1 className="text-2xl">{t.schedule.title}</h1>
+-      <section className="panel p-4 grid gap-2">
+-        {ORDER.map((d) => { const day = hours[d]; const s = day.slots[0] ?? { start: "10:00", end: "19:00" }; return (
+-          <div key={d} className="grid grid-cols-[6.5rem_auto_1fr_1fr] gap-2 items-center">
+-            <span className="font-medium">{t.schedule.days[Number(d)]}</span>
+-            <label className="flex items-center gap-2"><input type="checkbox" className="size-6 accent-[var(--color-teal-800)]" checked={day.open} onChange={(e) => setDay(d, { open: e.target.checked })} /><span className="sr-only">{t.schedule.open}</span></label>
+-            <input type="time" aria-label={t.schedule.from} className="input" disabled={!day.open} value={s.start} onChange={(e) => setDay(d, { start: e.target.value })} />
+-            <input type="time" aria-label={t.schedule.to} className="input" disabled={!day.open} value={s.end} onChange={(e) => setDay(d, { end: e.target.value })} />
+-          </div>
+-        ); })}
+-        <button className="btn btn-primary justify-self-start mt-2" onClick={() => run(() => api("partner/hours", "PUT", { hours }))}>{t.schedule.save}</button>
+-      </section>
+-      <section className="panel p-4 grid gap-3">
+-        <h2 className="text-lg">{t.schedule.holidays}</h2>
+-        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); const d = String(new FormData(e.currentTarget).get("d") ?? ""); if (d) { const next = [...holidays, d]; setHolidays(next); run(() => api("partner/holidays", "PUT", { dates: next })); } }}>
+-          <input type="date" name="d" className="input" aria-label={t.schedule.addHoliday} /><button className="btn btn-outline"><Plus aria-hidden size={16} />{t.schedule.addHoliday}</button>
+-        </form>
+-        <ul className="flex flex-wrap gap-2">{holidays.map((d) => <li key={d} className="chip">{dateOnly(d, locale)}<button aria-label={t.schedule.remove} onClick={() => { const next = holidays.filter((x) => x !== d); setHolidays(next); run(() => api("partner/holidays", "PUT", { dates: next })); }}><Trash2 aria-hidden size={14} /></button></li>)}</ul>
+-      </section>
+-      <section id="blocks" className="panel p-4 grid gap-3">
+-        <h2 className="text-lg">{t.schedule.blocks}</h2>
+-        <form className="grid sm:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end" onSubmit={(e) => { e.preventDefault(); const f = new FormData(e.currentTarget); const form = e.currentTarget; run(async () => { await api("partner/blocks", "POST", { start: new Date(String(f.get("start")) + "+05:30").toISOString(), end: new Date(String(f.get("end")) + "+05:30").toISOString(), reason: f.get("reason") || undefined }); form.reset(); blocks.reload(); }); }}>
+-          <label className="field"><span>{t.schedule.start}</span><input type="datetime-local" name="start" className="input" required /></label>
+-          <label className="field"><span>{t.schedule.end}</span><input type="datetime-local" name="end" className="input" required /></label>
+-          <label className="field"><span>{t.schedule.reason}</span><input name="reason" className="input" /></label>
+-          <button className="btn btn-outline">{t.schedule.addBlock}</button>
+-        </form>
+-        {blocks.error && <LoadFailure message={blocks.error} onRetry={blocks.reload} />}<ul className="grid gap-2">{blocks.data?.blocks.map((b) => <li key={b._id} className="flex items-center gap-3"><span className="flex-1">{dateTime(b.start, locale)} – {dateTime(b.end, locale)}{b.reason ? ` · ${b.reason}` : ""}</span><button className="btn btn-sm btn-danger" onClick={() => run(async () => { await api(`partner/blocks/${b._id}`, "DELETE"); blocks.reload(); })}>{t.schedule.remove}</button></li>)}</ul>
+-      </section>
+-      {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
+-    </div>
+-  );
+-}
+diff --git a/app/staff/page.tsx b/app/staff/page.tsx
+deleted file mode 100644
+index 2dab882..0000000
+--- a/app/staff/page.tsx
++++ /dev/null
+@@ -1,34 +0,0 @@
+-"use client";
+-import { useState } from "react";
+-import { Plus } from "lucide-react";
+-import type { Service, Staff } from "@/lib/core/types";
+-import { api, useData } from "@/lib/client";
+-import { Empty, LoadFailure, Notice, Spinner } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-
+-export default function StaffPage() {
+-  const { t } = usePartner();
+-  const { data, error, reload } = useData<{ staff: Staff[] }>("partner/staff");
+-  const services = useData<{ services: Service[] }>("partner/services").data?.services ?? [];
+-  const [edit, setEdit] = useState<Partial<Staff> | null>(null);
+-  const [err, setErr] = useState("");
+-  if (!data) return error ? <LoadFailure message={error} onRetry={reload} /> : <Spinner label={t.common.loading} />;
+-  return (
+-    <div className="grid gap-4">
+-      <div className="flex items-center gap-3"><h1 className="text-2xl mr-auto">{t.staff.title}</h1><button className="btn btn-primary btn-sm" onClick={() => setEdit({ name: "", role: "", serviceIds: [], active: true })}><Plus aria-hidden size={18} />{t.staff.add}</button></div>
+-      {edit && (
+-        <form className="panel p-5 grid gap-3" onSubmit={async (e) => { e.preventDefault(); setErr(""); try { if (edit._id) await api(`partner/staff/${edit._id}`, "PATCH", edit); else await api("partner/staff", "POST", edit); setEdit(null); reload(); } catch (x) { setErr((x as Error).message); } }}>
+-          <label className="field"><span>{t.staff.name}</span><input className="input" required value={edit.name ?? ""} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
+-          <label className="field"><span>{t.staff.role}</span><input className="input" value={edit.role ?? ""} onChange={(e) => setEdit({ ...edit, role: e.target.value })} /></label>
+-          <fieldset className="field"><legend className="font-semibold text-[0.95rem] mb-1">{t.staff.services}</legend><div className="flex flex-wrap gap-2">{services.map((s) => { const on = edit.serviceIds?.includes(s._id); return <button type="button" key={s._id} className="chip" aria-pressed={!!on} onClick={() => setEdit({ ...edit, serviceIds: on ? edit.serviceIds!.filter((x) => x !== s._id) : [...(edit.serviceIds ?? []), s._id] })}>{s.name}</button>; })}</div></fieldset>
+-          <label className="flex items-center gap-3"><input type="checkbox" className="size-6 accent-[var(--color-teal-800)]" checked={edit.active !== false} onChange={(e) => setEdit({ ...edit, active: e.target.checked })} />{t.staff.active}</label>
+-          {err && <Notice tone="bad">{err}</Notice>}
+-          <div className="flex gap-2"><button className="btn btn-primary">{t.staff.save}</button><button type="button" className="btn btn-outline" onClick={() => setEdit(null)}>{t.common.close}</button></div>
+-        </form>
+-      )}
+-      {data.staff.length === 0 && !edit ? <Empty title={t.staff.empty} /> : (
+-        <ul className="panel divide-y divide-[var(--color-line)]">{data.staff.map((s) => <li key={s._id}><button className="w-full text-left p-4 flex gap-3 items-center" onClick={() => setEdit(s)}><span className="flex-1"><span className="font-semibold block">{s.name}</span><span className="muted">{s.role}</span></span>{!s.active && <span className="badge">off</span>}</button></li>)}</ul>
+-      )}
+-    </div>
+-  );
+-}
+diff --git a/app/support/page.tsx b/app/support/page.tsx
+deleted file mode 100644
+index c502ac6..0000000
+--- a/app/support/page.tsx
++++ /dev/null
+@@ -1,26 +0,0 @@
+-"use client";
+-import { useState } from "react";
+-import { api, useData } from "@/lib/client";
+-import { dateTime } from "@/lib/shared/format";
+-import { LoadFailure, Notice } from "@/lib/shared/ui";
+-import { usePartner } from "@/components/Partner";
+-
+-type Ticket = { _id: string; ref: string; subject: string; status: string; messages: { byRole: string; text: string; at: string }[] };
+-export default function SupportPage() {
+-  const { t, locale } = usePartner();
+-  const { data, error, reload } = useData<{ tickets: Ticket[] }>("me/tickets");
+-  const [msg, setMsg] = useState("");
+-  return (
+-    <div className="grid gap-4"><h1 className="text-2xl">{t.nav.support}</h1>
+-      <form className="panel p-4 grid gap-3" onSubmit={async (e) => { e.preventDefault(); const f = new FormData(e.currentTarget); const form = e.currentTarget; try { await api("me/tickets", "POST", { category: f.get("category"), subject: f.get("subject"), text: f.get("text") }); form.reset(); setMsg(t.common.saved); reload(); } catch (x) { setMsg((x as Error).message); } }}>
+-        <select name="category" className="input" aria-label="Type"><option value="partner">Partner account / payouts</option><option value="booking">Booking</option><option value="safety">Safety concern</option><option value="other">Other</option></select>
+-        <input name="subject" className="input" required minLength={3} placeholder="Subject" />
+-        <textarea name="text" className="input" required minLength={5} />
+-        <button className="btn btn-primary justify-self-start">Send</button>
+-        {msg && <Notice>{msg}</Notice>}
+-      </form>
+-      {error && !data && <LoadFailure message={error} onRetry={reload} />}
+-      <ul className="grid gap-3">{data?.tickets.map((x) => <li key={x._id} className="panel p-4 grid gap-2"><p className="font-semibold">{x.subject} <span className="badge ml-2">{x.status}</span> <span className="muted text-sm">{x.ref}</span></p>{x.messages.map((m, i) => <p key={i} className={`p-2 rounded-lg ${m.byRole === "admin" ? "bg-[var(--color-teal-50)]" : "bg-[var(--color-ivory)]"}`}><span className="muted text-sm block">{m.byRole === "admin" ? "Saj Saathi" : "You"} · {dateTime(m.at, locale)}</span>{m.text}</p>)}<form className="flex gap-2" onSubmit={async (e) => { e.preventDefault(); const form = e.currentTarget; await api(`me/tickets/${x._id}`, "POST", { text: new FormData(form).get("text") }); form.reset(); reload(); }}><input name="text" className="input" required /><button className="btn btn-outline">Send</button></form></li>)}</ul>
+-    </div>
+-  );
+-}
+diff --git a/components/Shell.tsx b/components/Shell.tsx
+deleted file mode 100644
+index b4d97ca..0000000
+--- a/components/Shell.tsx
++++ /dev/null
+@@ -1,133 +0,0 @@
+-"use client";
+-
+-import Link from "next/link";
+-import { usePathname } from "next/navigation";
+-import { useEffect, useState } from "react";
+-import {
+-  ArrowUpRight, Bell, Building2, CalendarDays, ClipboardList,
+-  Clock3, FileText, Home, LifeBuoy, LogOut, Menu, QrCode, Scissors,
+-  Settings, Star, UserRound, Users, Wallet,
+-} from "lucide-react";
+-import { InstallButton } from "./InstallButton";
+-import { Logo } from "@/lib/shared/Logo";
+-import { StatusBadge } from "@/lib/shared/ui";
+-import { usePartner } from "./Partner";
+-
+-export function Shell({ children }: { children: React.ReactNode }) {
+-  const { t, app, appError, appLoading, reloadApp, has } = usePartner();
+-  const path = usePathname();
+-  const [offline, setOffline] = useState(false);
+-  const [loggingOut, setLoggingOut] = useState(false);
+-  const isAuth = path.startsWith("/login") || path.startsWith("/signup");
+-
+-  useEffect(() => {
+-    const update = () => setOffline(!navigator.onLine);
+-    const onInstallPrompt = (event: Event) => {
+-      event.preventDefault();
+-      (window as Window & { __sspInstallPrompt?: Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> } }).__sspInstallPrompt = event as Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
+-      window.dispatchEvent(new Event("ssp-installable"));
+-    };
+-    update();
+-    window.addEventListener("online", update);
+-    window.addEventListener("offline", update);
+-    window.addEventListener("beforeinstallprompt", onInstallPrompt);
+-    if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
+-      navigator.serviceWorker.register("/sw.js").catch((error) => console.error("Partner service worker registration failed", error));
+-    }
+-    return () => {
+-      window.removeEventListener("online", update);
+-      window.removeEventListener("offline", update);
+-      window.removeEventListener("beforeinstallprompt", onInstallPrompt);
+-    };
+-  }, []);
+-
+-  const businessKind = app?.application?.kind;
+-  const groups = [
+-    { title: "Workspace", items: [
+-      { href: "/", label: t.nav.home, Icon: Home, show: true },
+-      { href: "/bookings", label: t.nav.bookings, Icon: ClipboardList, show: true },
+-      { href: "/calendar", label: t.nav.calendar, Icon: CalendarDays, show: true },
+-    ] },
+-    { title: "Manage business", items: [
+-      { href: "/services", label: t.nav.services, Icon: Scissors, show: true },
+-      { href: "/staff", label: t.nav.staff, Icon: Users, show: has("staff") && businessKind === "business" },
+-      { href: "/schedule", label: t.nav.schedule, Icon: Clock3, show: true },
+-      { href: "/branches", label: t.nav.branches, Icon: Building2, show: has("branches") && businessKind === "business" },
+-    ] },
+-    { title: "Grow & engage", items: [
+-      { href: "/money", label: t.nav.money, Icon: Wallet, show: true },
+-      { href: "/reviews", label: t.nav.reviews, Icon: Star, show: true },
+-      { href: "/promote", label: t.nav.promote, Icon: QrCode, show: true },
+-      { href: "/notifications", label: t.nav.notifications, Icon: Bell, show: true },
+-    ] },
+-    { title: "Account", items: [
+-      { href: "/application", label: t.nav.application, Icon: FileText, show: true },
+-      { href: "/profile", label: t.nav.profile, Icon: UserRound, show: true },
+-      { href: "/support", label: t.nav.support, Icon: LifeBuoy, show: true },
+-      { href: "/settings", label: t.nav.settings, Icon: Settings, show: true },
+-    ] },
+-  ].map((group) => ({ ...group, items: group.items.filter((item) => item.show) })).filter((group) => group.items.length > 0);
+-
+-  const tabs = [
+-    { href: "/", label: t.nav.home, Icon: Home },
+-    { href: "/bookings", label: t.nav.bookings, Icon: ClipboardList },
+-    { href: "/calendar", label: t.nav.calendar, Icon: CalendarDays },
+-    { href: "/services", label: t.nav.services, Icon: Scissors },
+-    { href: "/more", label: t.nav.more, Icon: Menu },
+-  ];
+-  const active = (href: string) => href === "/" ? path === "/" : path === href || path.startsWith(`${href}/`);
+-
+-  async function logout() {
+-    if (loggingOut) return;
+-    setLoggingOut(true);
+-    try { await fetch("/api/session/logout", { method: "POST", credentials: "same-origin", cache: "no-store" }); }
+-    catch { /* The login page will clear the unusable client session path. */ }
+-    finally { window.location.assign("/login"); }
+-  }
+-
+-  if (isAuth) return <><div className="auth-install"><InstallButton /></div>{children}</>;
+-
+-  return (
+-    <div className="partner-layout">
+-      <aside className="partner-sidebar">
+-        <div className="partner-sidebar-brand"><Logo onDark height={32} /><span className="partner-brand-caption">PARTNER WORKSPACE</span></div>
+-        <div className="partner-sidebar-business">
+-          <span className="partner-business-mark">{(app?.application?.businessName || "S").trim().charAt(0).toUpperCase()}</span>
+-          <span className="min-w-0"><strong className="block truncate">{app?.application?.businessName || "Your business"}</strong><small>{app?.application ? t.status[app.application.status] : "Complete your application"}</small></span>
+-        </div>
+-        <nav aria-label="Partner workspace" className="partner-side-nav">
+-          {groups.map((group) => <section key={group.title} className="partner-nav-group">
+-            <h2>{group.title}</h2>
+-            {group.items.map(({ href, label, Icon }) => <Link key={href} href={href} aria-current={active(href) ? "page" : undefined} className={`partner-nav-link ${active(href) ? "is-active" : ""}`}><Icon size={18} aria-hidden /><span>{label}</span>{active(href) && <span className="partner-nav-indicator" />}</Link>)}
+-          </section>)}
+-        </nav>
+-        <div className="partner-sidebar-footer">
+-          <Link href="/support" className="partner-help-link"><LifeBuoy size={17} aria-hidden /><span>Partner support</span><ArrowUpRight size={15} aria-hidden /></Link>
+-          <button type="button" onClick={logout} disabled={loggingOut} className="partner-logout"><LogOut size={17} aria-hidden />{loggingOut ? "Signing out…" : t.nav.logout}</button>
+-          <small>SAJ SAATHI · INDIA</small>
+-        </div>
+-      </aside>
+-
+-      <div className="partner-main-column">
+-        <header className="partner-topbar">
+-          <div className="partner-topbar-mobile"><Logo variant="symbol" height={30} /></div>
+-          <div className="partner-topbar-title"><span className="partner-topbar-kicker">{t.app}</span><strong>{app?.application?.businessName || "Partner workspace"}</strong></div>
+-          <div className="partner-topbar-actions">
+-            {app?.application && <StatusBadge status={app.application.status} label={t.status[app.application.status]} />}
+-            <Link href="/notifications" className="partner-icon-button" aria-label={t.nav.notifications}><Bell size={19} aria-hidden /></Link>
+-            <Link href="/profile" className="partner-avatar-link" aria-label={t.nav.profile}><UserRound size={18} aria-hidden /></Link>
+-            <InstallButton />
+-          </div>
+-        </header>
+-
+-        {offline && <div role="status" className="partner-offline"><span className="partner-offline-dot" />{t.common.offline}</div>}
+-        {appError && !appLoading && <div role="alert" className="partner-connection-alert"><div><strong>Could not load your partner profile.</strong><p>{appError}</p><p>Check the secure API connection at <a href="/api/health" target="_blank" rel="noreferrer">/api/health</a>.</p></div><button type="button" className="btn btn-outline btn-sm" onClick={() => reloadApp()}>Try again</button></div>}
+-
+-        <main id="main" className="partner-main-content"><div className="partner-content-inner">{children}</div></main>
+-        <nav aria-label="Main navigation" className="partner-mobile-nav">
+-          {tabs.map(({ href, label, Icon }) => <Link key={href} href={href} aria-current={active(href) ? "page" : undefined} className={`partner-mobile-tab ${active(href) ? "is-active" : ""}`}><Icon aria-hidden size={21} /><span>{label}</span></Link>)}
+-        </nav>
+-      </div>
+-    </div>
+-  );
+-}
