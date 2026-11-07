@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { makeCtx } from "./helpers";
 import { login, register, resolveActor, syncPartnerOwnerFromEnv } from "../lib/core/auth";
 import { startApplication } from "../lib/core/partner";
-import type { Category, User } from "../lib/core/types";
+import type { Category, Provider, User } from "../lib/core/types";
 
 test("Partner owner Vercel env changes update the same account and preserve its application link", async () => {
   const { ctx } = await makeCtx();
