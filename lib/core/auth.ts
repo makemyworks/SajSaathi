@@ -13,6 +13,91 @@ export const SESSION_TTL: Record<Role, number> = {
 };
 export const LEGAL_VERSION = "2026-11-draft";
 
+/**
+ * Optional single Partner-owner account controlled from the Customer/API Vercel project.
+ * When PARTNER_OWNER_EMAIL and PARTNER_OWNER_PASSWORD are configured, the next Partner
+ * login request synchronises that account into MongoDB before normal password verification.
+ * This avoids needing a local setup command for the first owner account or later credential changes.
+ * The credentials remain server-side; the Partner app still receives a normal central API session.
+ */
+export async function syncPartnerOwnerFromEnv(ctx: Ctx, env: Record<string, string | undefined> = process.env): Promise<User | null> {
+  const rawEmail = env.PARTNER_OWNER_EMAIL?.trim();
+  const password = env.PARTNER_OWNER_PASSWORD;
+  const name = (env.PARTNER_OWNER_NAME?.trim() || "Saj Saathi Partner").slice(0, 80);
+  const rawPhone = env.PARTNER_OWNER_PHONE?.trim();
+
+  // If not configured, retain the standard self-service partner login/signup flow.
+  if (!rawEmail && !password) return null;
+  if (!rawEmail || !password) throw new AppError(503, "partner_owner_env_incomplete", "Configure both PARTNER_OWNER_EMAIL and PARTNER_OWNER_PASSWORD in the Customer + Admin Vercel project.");
+
+  const email = rawEmail.toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AppError(503, "partner_owner_env_invalid", "PARTNER_OWNER_EMAIL must be a valid email address.");
+  const passwordIssue = passwordProblem(password);
+  if (passwordIssue) throw new AppError(503, "partner_owner_env_invalid", `PARTNER_OWNER_PASSWORD is invalid: ${passwordIssue}.`);
+  const phone = rawPhone ? (normalizeIndianPhone(rawPhone) ?? undefined) : undefined;
+  if (rawPhone && !phone) throw new AppError(503, "partner_owner_env_invalid", "PARTNER_OWNER_PHONE must be a valid 10-digit Indian mobile number.");
+
+  const users = ctx.repo.col<User>("users");
+  let user = await users.findOne({ partnerBootstrapManaged: true });
+  // Prefer exact identity matches. On the first Vercel-managed setup, an owner may
+  // have already registered and started an application before the env credentials
+  // were configured. If there is exactly one Partner owner in the database, safely
+  // adopt that same account even when the Founder changes its email on first setup.
+  // If there are multiple owners, never guess: require the existing email or phone.
+  if (!user) user = await users.findOne({ email });
+  if (!user && phone) user = await users.findOne({ phone });
+  if (!user && !phone) {
+    const existingPartnerOwners = await users.find({ role: "partner_owner" }, { limit: 2, sort: { createdAt: 1 } });
+    if (existingPartnerOwners.length === 1) user = existingPartnerOwners[0];
+    else if (existingPartnerOwners.length > 1) {
+      throw new AppError(409, "partner_owner_match_required", "More than one Partner account exists. Set PARTNER_OWNER_EMAIL to the existing account's current email, or set PARTNER_OWNER_PHONE to its registered mobile number. No new account was created and no application was changed.");
+    }
+  }
+
+  const now = ctx.now();
+  if (user) {
+    if (user.role !== "partner_owner") throw new AppError(409, "partner_owner_account_conflict", "The configured Partner owner email/phone already belongs to a non-partner account. Choose a separate Partner email or phone.");
+    if (user.status !== "active") throw new AppError(403, "partner_owner_inactive", "The configured Partner owner account is disabled. Ask the Founder Admin to reactivate it.");
+    const passwordIsCurrent = await verifyPassword(password, user.passwordHash);
+    const emailChanged = user.email !== email;
+    const phoneChanged = Boolean(phone && user.phone !== phone);
+    const nameChanged = user.name !== name;
+    const shouldMarkManaged = user.partnerBootstrapManaged !== true;
+    if (!passwordIsCurrent || emailChanged || phoneChanged || nameChanged || shouldMarkManaged) {
+      const set: Record<string, unknown> = { partnerBootstrapManaged: true, updatedAt: now };
+      if (!passwordIsCurrent) set.passwordHash = await hashPassword(password);
+      if (emailChanged) set.email = email;
+      if (phoneChanged && phone) set.phone = phone;
+      if (nameChanged) set.name = name;
+      try {
+        user = (await users.updateOne({ _id: user._id }, { $set: set }))!;
+      } catch (error) {
+        if (error instanceof DuplicateKeyError) throw new AppError(409, "partner_owner_contact_in_use", "That Partner owner email or phone is already used by another account.");
+        throw error;
+      }
+      if (!passwordIsCurrent) await logoutAll(ctx, user._id);
+      await audit(ctx, { userId: user._id, role: "partner_owner" }, "partner.owner_env_sync", "user", user._id, { emailChanged, phoneChanged, nameChanged, passwordChanged: !passwordIsCurrent });
+    }
+    return user;
+  }
+
+  const created: User = {
+    _id: newId(), role: "partner_owner", partnerBootstrapManaged: true, name, email, phone,
+    passwordHash: await hashPassword(password), status: "active", locale: "en", consents: [
+      { kind: "terms", version: LEGAL_VERSION, granted: false, at: now },
+      { kind: "privacy", version: LEGAL_VERSION, granted: false, at: now },
+    ], favourites: [], createdAt: now, updatedAt: now,
+  };
+  try {
+    await users.insertOne(created);
+  } catch (error) {
+    if (error instanceof DuplicateKeyError) throw new AppError(409, "partner_owner_contact_in_use", "That Partner owner email or phone is already used by another account.");
+    throw error;
+  }
+  await audit(ctx, { userId: created._id, role: "partner_owner" }, "partner.owner_env_create", "user", created._id, { email });
+  return created;
+}
+
 /** Fixed-window rate limiter backed by the database (works on serverless; TTL index cleans up). */
 export async function rateLimit(ctx: Ctx, key: string, limit: number, windowSeconds: number): Promise<void> {
   const window = Math.floor(ctx.now().getTime() / 1000 / windowSeconds);

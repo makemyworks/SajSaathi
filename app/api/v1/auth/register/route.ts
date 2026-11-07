@@ -18,7 +18,11 @@ export const POST = api(async ({ req, ctx, ip }) => {
   await rateLimit(ctx, `register:${ip}`, 10, 3600);
   const b = parse(schema, await body(req));
   const internalCall = !!process.env.INTERNAL_API_KEY && req.headers.get("x-ss-internal-key") === process.env.INTERNAL_API_KEY;
-  if (b.role === "partner_owner" && !internalCall) b.role = "customer";
+  // Never silently turn a Partner signup into a Customer account. If the Partner
+  // server key is missing or mismatched, stop before creating any user record.
+  if (b.role === "partner_owner" && !internalCall) {
+    return NextResponse.json({ error: { code: "partner_connection_misconfigured", message: "Partner registration is not connected to Saj Saathi. The Partner and Customer projects must use the same INTERNAL_API_KEY. No account was created; correct the Vercel settings and try again." } }, { status: 403, headers: { "cache-control": "no-store" } });
+  }
   const user = await register(ctx, { ...b, role: b.role ?? "customer" });
   const r = await login(ctx, { identifier: user.email ?? user.phone!, password: b.password, expectRoles: [user.role], ip, userAgent: req.headers.get("user-agent") ?? undefined });
   const internal = !!process.env.INTERNAL_API_KEY && req.headers.get("x-ss-internal-key") === process.env.INTERNAL_API_KEY;

@@ -1,0 +1,13 @@
+SAJ SAATHI MAIN CUSTOMER + ADMIN — PARTNER RETENTION BACKEND PATCH
+
+UPLOAD TARGET: github.com/makemyworks/SajSaathi (main branch)
+
+This patch belongs ONLY in the Main Customer + Admin repository. It includes the central application API, owner-account matching, application recovery by ownerUserId, idempotent application creation, and Vercel-managed Partner owner login synchronisation.
+
+1. Extract this ZIP.
+2. Upload all extracted folders into the Main repository root, preserving paths.
+3. Replace matching files and commit to main.
+4. In Main Vercel, set PARTNER_OWNER_NAME, PARTNER_OWNER_EMAIL and PARTNER_OWNER_PASSWORD for Production. PARTNER_OWNER_PHONE is optional and should be the existing account's registered phone when multiple Partner owners exist or when email matching is ambiguous.
+5. Redeploy Main. Partner login calls this API and syncs the managed account before credential verification.
+
+Never upload this patch to SajSaathiPartner. Main-only routes depend on Main server modules and will cause the Partner build to fail if copied into the Partner repository.

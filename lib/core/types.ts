@@ -32,6 +32,8 @@ export interface User {
   passwordHash?: string;
   status: "active" | "disabled" | "deletion_requested" | "deleted";
   providerId?: Id; // for partner_owner / partner_staff
+  /** True only for the single Partner owner account managed from private Vercel environment variables. */
+  partnerBootstrapManaged?: boolean;
   locale: Locale;
   mfa?: { enabled: boolean; secret?: string };
   consents: Consent[];

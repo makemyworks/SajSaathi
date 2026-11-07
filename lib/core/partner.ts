@@ -35,30 +35,107 @@ async function myProvider(ctx: Ctx, actor: Actor & { providerId: string }) {
 
 const EDITABLE: ApplicationStatus[] = ["draft", "documents_required", "rejected"];
 
+/** Resolve an owner's application and repair a stale/missing user.providerId link. */
+export async function getPartnerApplication(ctx: Ctx, actor: Actor | null) {
+  if (!actor || !["partner_owner", "partner_staff"].includes(actor.role)) throw forbidden("Please log in to your partner account");
+  const providers = ctx.repo.col<Provider>("providers");
+  // For owners, only accept the linked provider when it is actually owned by this user.
+  // A stale pointer to a different provider must be repaired, not shown as someone else's account.
+  let provider = actor.providerId
+    ? await providers.findOne(actor.role === "partner_owner" ? { _id: actor.providerId, ownerUserId: actor.userId } : { _id: actor.providerId })
+    : null;
+  if (!provider && actor.role === "partner_owner") {
+    provider = await providers.findOne({ ownerUserId: actor.userId }, { sort: { updatedAt: -1 } });
+    if (provider && actor.providerId !== provider._id) {
+      await ctx.repo.col<User>("users").updateOne({ _id: actor.userId }, { $set: { providerId: provider._id, updatedAt: ctx.now() } });
+    }
+  }
+  if (!provider) return { application: null, category: null, checklist: undefined, documents: [] as Omit<DocumentRecord, "storageKey">[] };
+  if (actor.role === "partner_owner" && provider.ownerUserId !== actor.userId) throw forbidden("This application does not belong to your account");
+  const [category, checklist, docs] = await Promise.all([
+    ctx.repo.col<Category>("categories").findOne({ _id: provider.primaryCategoryId }),
+    applicationChecklist(ctx, provider),
+    ctx.repo.col<DocumentRecord>("documents").find({ providerId: provider._id }, { sort: { createdAt: -1 } }),
+  ]);
+  return { application: provider, category, checklist, documents: docs.map(({ storageKey: _storageKey, ...doc }) => (void _storageKey, doc)) };
+}
+
 export async function startApplication(ctx: Ctx, actor: Actor, input: { categoryId: string; kind: "business" | "individual"; businessName: string; phone: string }) {
   if (actor.role !== "partner_owner") throw forbidden();
-  if (actor.providerId) throw conflict("exists", "You already have an application");
-  const cat = await ctx.repo.col<Category>("categories").findOne({ _id: input.categoryId, status: "active" });
-  if (!cat) throw badRequest("Please choose a valid category");
-  const phone = normalizeIndianPhone(input.phone);
-  if (!phone) throw badRequest("Enter a valid 10-digit mobile number");
-  const bad = findDisallowedClaims(input.businessName, cat);
-  if (bad.length) throw badRequest(`Please don't use "${bad.join(", ")}" in your name for this category`);
+  const providers = ctx.repo.col<Provider>("providers");
+  const users = ctx.repo.col<User>("users");
+
+  // A retry after a timeout must resume the same application, not create another one.
+  const existing = await providers.findOne({ ownerUserId: actor.userId }, { sort: { updatedAt: -1 } });
+  if (existing) {
+    if (actor.providerId !== existing._id) await users.updateOne({ _id: actor.userId }, { $set: { providerId: existing._id, updatedAt: ctx.now() } });
+    return existing;
+  }
+
+  // Claim a short-lived account-level lock before creating the first provider record.
+  // This closes the double-click / two-tabs race without requiring a new unique index
+  // that could fail on older databases containing legacy duplicate records.
   const now = ctx.now();
-  const base = slugify(input.businessName) || "partner";
-  const p: Provider = {
-    _id: newId(), ownerUserId: actor.userId, kind: input.kind, categoryIds: [cat._id], primaryCategoryId: cat._id,
-    businessName: input.businessName.trim(), slug: `${base}-${newId().slice(-5)}`, phone,
-    address: { line1: "", city: "", state: "", pin: "", country: "IN" }, branches: [],
-    atHome: false, inStore: input.kind === "business", hours: DEFAULT_HOURS, holidays: [], timezone: "Asia/Kolkata",
-    status: "draft", verified: false, onboardingAnswers: {}, credentials: [], gallery: [], ratingAvg: 0, ratingCount: 0,
-    plan: { code: "free", status: "none" }, createdAt: now, updatedAt: now,
-  };
-  try { await ctx.repo.col<Provider>("providers").insertOne(p); }
-  catch (e) { if (e instanceof DuplicateKeyError) throw conflict("slug", "Please try again"); throw e; }
-  await ctx.repo.col<User>("users").updateOne({ _id: actor.userId }, { $set: { providerId: p._id, updatedAt: now } });
-  await audit(ctx, actor, "application.start", "provider", p._id);
-  return p;
+  const lockId = newId();
+  const lockUntil = new Date(now.getTime() + 45_000);
+  const lock = await users.updateOne({
+    _id: actor.userId,
+    $or: [
+      { partnerApplicationStartLockUntil: { $exists: false } },
+      { partnerApplicationStartLockUntil: null },
+      { partnerApplicationStartLockUntil: { $lt: now } },
+    ],
+  }, { $set: { partnerApplicationStartLockId: lockId, partnerApplicationStartLockUntil: lockUntil, updatedAt: now } });
+
+  if (!lock) {
+    // The other request may have completed between our first lookup and lock claim.
+    const recovered = await providers.findOne({ ownerUserId: actor.userId }, { sort: { updatedAt: -1 } });
+    if (recovered) {
+      if (actor.providerId !== recovered._id) await users.updateOne({ _id: actor.userId }, { $set: { providerId: recovered._id, updatedAt: ctx.now() } });
+      return recovered;
+    }
+    throw conflict("application_start_in_progress", "Your application is already being saved. Wait a moment and refresh this page; your account and application details have not been deleted.");
+  }
+
+  try {
+    // Re-check after obtaining the lock for safety against a request that finished
+    // immediately before the lock was acquired.
+    const raced = await providers.findOne({ ownerUserId: actor.userId }, { sort: { updatedAt: -1 } });
+    if (raced) {
+      await users.updateOne({ _id: actor.userId, partnerApplicationStartLockId: lockId }, { $set: { providerId: raced._id, updatedAt: ctx.now() }, $unset: { partnerApplicationStartLockId: "", partnerApplicationStartLockUntil: "" } });
+      return raced;
+    }
+
+    const cat = await ctx.repo.col<Category>("categories").findOne({ _id: input.categoryId, status: "active" });
+    if (!cat) throw badRequest("Please choose a valid category");
+    const phone = normalizeIndianPhone(input.phone);
+    if (!phone) throw badRequest("Enter a valid 10-digit mobile number");
+    const bad = findDisallowedClaims(input.businessName, cat);
+    if (bad.length) throw badRequest(`Please don't use "${bad.join(", ")}" in your name for this category`);
+    const base = slugify(input.businessName) || "partner";
+    const p: Provider = {
+      _id: newId(), ownerUserId: actor.userId, kind: input.kind, categoryIds: [cat._id], primaryCategoryId: cat._id,
+      businessName: input.businessName.trim(), slug: `${base}-${newId().slice(-5)}`, phone,
+      address: { line1: "", city: "", state: "", pin: "", country: "IN" }, branches: [],
+      atHome: false, inStore: input.kind === "business", hours: DEFAULT_HOURS, holidays: [], timezone: "Asia/Kolkata",
+      status: "draft", verified: false, onboardingAnswers: {}, credentials: [], gallery: [], ratingAvg: 0, ratingCount: 0,
+      plan: { code: "free", status: "none" }, createdAt: now, updatedAt: now,
+    };
+    try { await providers.insertOne(p); }
+    catch (e) { if (e instanceof DuplicateKeyError) throw conflict("slug", "Please try again"); throw e; }
+    await users.updateOne({ _id: actor.userId, partnerApplicationStartLockId: lockId }, {
+      $set: { providerId: p._id, updatedAt: now },
+      $unset: { partnerApplicationStartLockId: "", partnerApplicationStartLockUntil: "" },
+    });
+    await audit(ctx, actor, "application.start", "provider", p._id);
+    return p;
+  } finally {
+    // Release only our own lock. If a serverless request terminates unexpectedly,
+    // the lock also expires automatically after 45 seconds.
+    await users.updateOne({ _id: actor.userId, partnerApplicationStartLockId: lockId }, {
+      $unset: { partnerApplicationStartLockId: "", partnerApplicationStartLockUntil: "" },
+    }).catch(() => null);
+  }
 }
 
 export async function updateApplication(ctx: Ctx, actorIn: Actor | null, input: Partial<Pick<Provider, "businessName" | "about" | "email" | "address" | "serviceArea" | "atHome" | "inStore" | "travelFeePaise" | "hours" | "onboardingAnswers" | "credentials" | "categoryIds" | "branches">>) {

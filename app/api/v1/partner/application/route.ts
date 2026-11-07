@@ -1,21 +1,9 @@
-import { startApplication, updateApplication, applicationChecklist, requirePartner } from "@/lib/core/partner";
-import type { Category, DocumentRecord, Provider } from "@/lib/core/types";
+import { startApplication, updateApplication, getPartnerApplication, requirePartner } from "@/lib/core/partner";
 import { parse, v } from "@/lib/core/validate";
 import { AppError } from "@/lib/core/util";
 import { api, body, needLogin } from "@/lib/server/http";
 
-export const GET = api(async ({ ctx, actor }) => {
-  const a = needLogin(actor);
-  if (!a.providerId) return { application: null };
-  const p = await ctx.repo.col<Provider>("providers").findOne({ _id: a.providerId });
-  if (!p) return { application: null };
-  const [category, checklist, docs] = await Promise.all([
-    ctx.repo.col<Category>("categories").findOne({ _id: p.primaryCategoryId }),
-    applicationChecklist(ctx, p),
-    ctx.repo.col<DocumentRecord>("documents").find({ providerId: p._id }, { sort: { createdAt: -1 } }),
-  ]);
-  return { application: p, category, checklist, documents: docs.map(({ storageKey: _s, ...d }) => (void _s, d)) };
-});
+export const GET = api(async ({ ctx, actor }) => getPartnerApplication(ctx, actor));
 
 const startSchema = v.object({ categoryId: v.id(), kind: v.enum(["business", "individual"] as const), businessName: v.string({ min: 2, max: 100 }), phone: v.string({ max: 20 }) });
 export const POST = api(async ({ req, ctx, actor }) => {
