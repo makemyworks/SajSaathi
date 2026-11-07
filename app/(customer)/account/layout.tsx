@@ -15,11 +15,14 @@ export default async function AccountLayout({ children }: { children: React.Reac
     ["/account/memberships", t.account.memberships], ["/account/support", t.account.support], ["/account/profile", t.account.profile], ["/account/settings", t.account.settings],
   ] as [string, string][];
   return (
-    <div className="wrap py-8 grid gap-6">
-      <div className="flex items-center justify-between gap-4 flex-wrap"><h1>{user.name.split(" ")[0]}</h1><LogoutButton label={t.nav.logout} /></div>
-      <div className="grid lg:grid-cols-[15rem_1fr] gap-6 items-start">
+    <div className="wrap py-6 sm:py-8 grid gap-5">
+      <div className="customer-account-heading">
+        <div className="grid gap-1"><span className="section-kicker">{t.nav.account}</span><h1 className="text-2xl sm:text-3xl">Hello, {user.name.split(" ")[0]}</h1><p>Manage your appointments, saved places and account details from one place.</p></div>
+        <LogoutButton label={t.nav.logout} />
+      </div>
+      <div className="grid lg:grid-cols-[15.5rem_minmax(0,1fr)] gap-5 items-start">
         <AccountNav items={items} />
-        <div className="min-w-0">{children}</div>
+        <div className="min-w-0 grid gap-4">{children}</div>
       </div>
     </div>
   );

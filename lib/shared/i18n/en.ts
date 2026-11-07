@@ -2,7 +2,7 @@
 const en = {
   lang: { name: "English", switchTo: "हिंदी" },
   brand: { tagline: "Your everyday care companion", support: "Discover. Compare. Book. Experience." },
-  nav: { services: "Services", providers: "Providers", howItWorks: "How it works", forPartners: "For partners", login: "Log in", signup: "Sign up", account: "My account", bookings: "My bookings", logout: "Log out", menu: "Menu", close: "Close", help: "Help", skip: "Skip to content" },
+  nav: { home: "Home", services: "Services", providers: "Providers", howItWorks: "How it works", forPartners: "For partners", login: "Log in", signup: "Sign up", account: "My account", bookings: "My bookings", logout: "Log out", menu: "Menu", close: "Close", help: "Help", skip: "Skip to content" },
   hero: {
     lead: "I'm looking for",
     in: "in",

@@ -88,9 +88,9 @@ export default async function HomePage() {
     noProviders: "इस इलाके में अभी कोई सत्यापित प्रदाता सूचीबद्ध नहीं है। दूसरे इलाके से खोजें या हमें अपना क्षेत्र बताएं।",
     noAtHome: "इस समय घर पर सेवा देने वाले प्रदाता सूचीबद्ध नहीं हैं। उपलब्धता बदलने पर यहाँ दिखाई देंगे।",
   } : {
-    eyebrow: "BEAUTY  ·  GROOMING  ·  WELLNESS",
-    headlineA: "Your time.", headlineB: "Your kind of care.",
-    intro: "Discover salons and independent beauty professionals around you. Explore services, compare clear prices and book a time that works for you.",
+    eyebrow: "CARE  ·  GROOMING  ·  BEAUTY  ·  WELLNESS",
+    headlineA: "Care that fits you.", headlineB: "For every kind of you.",
+    intro: "From haircuts and beard care to skin, beauty and wellness, discover trusted services for men, women and families. Compare clear prices and book with confidence.",
     searchTitle: "Find your next feel-good moment",
     explore: "Explore services", browse: "Find a provider", homeCare: "At-home services", salonVisit: "Salon visits",
     categoriesKicker: "A little something for you", categoriesSub: "From everyday grooming to special occasions, find the service that fits your day.",
@@ -109,7 +109,7 @@ export default async function HomePage() {
     helpTitle: "Need a hand? We're here.", helpBody: "Visit our help centre for questions about bookings, payments or your account.",
     support: "Visit help centre", faq: "Frequently asked questions", contact: "Contact us", login: "Log in", signup: "Create account",
     preview: "Saj Saathi is getting its live marketplace ready.",
-    previewBody: "You can explore the service categories for now. Live providers and bookings will appear here when available.",
+    previewBody: "Explore the service categories while live providers and booking availability are being connected. We never label sample listings or prices as real.",
     noProviders: "There are no verified providers listed in this area yet. Try another location or tell us which area you would like us to serve.",
     noAtHome: "There are no at-home providers listed right now. Available options will appear here when ready.",
   };

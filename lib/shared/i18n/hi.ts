@@ -4,7 +4,7 @@ import type { Dict } from "./en";
 const hi: Dict = {
   lang: { name: "हिंदी", switchTo: "English" },
   brand: { tagline: "रोज़मर्रा की देखभाल का साथी", support: "खोजें। तुलना करें। बुक करें। अनुभव करें।" },
-  nav: { services: "सेवाएं", providers: "प्रदाता", howItWorks: "कैसे काम करता है", forPartners: "साझेदारों के लिए", login: "लॉग इन", signup: "साइन अप", account: "मेरा खाता", bookings: "मेरी बुकिंग", logout: "लॉग आउट", menu: "मेन्यू", close: "बंद करें", help: "मदद", skip: "मुख्य सामग्री पर जाएं" },
+  nav: { home: "होम", services: "सेवाएं", providers: "प्रदाता", howItWorks: "कैसे काम करता है", forPartners: "साझेदारों के लिए", login: "लॉग इन", signup: "साइन अप", account: "मेरा खाता", bookings: "मेरी बुकिंग", logout: "लॉग आउट", menu: "मेन्यू", close: "बंद करें", help: "मदद", skip: "मुख्य सामग्री पर जाएं" },
   hero: {
     lead: "मुझे चाहिए",
     in: "शहर",

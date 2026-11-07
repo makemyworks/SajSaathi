@@ -30,12 +30,12 @@ export default function ResourceEdit() {
   const { resource } = useAdmin();
   const r = resource(key);
   const router = useRouter();
-  const { data } = useData<{ row: Record<string, unknown> }>(r && !isNew ? `admin/resources/${key}/${id}` : null);
+  const { data, error, loading, reload } = useData<{ row: Record<string, unknown> }>(r && !isNew ? `admin/resources/${key}/${id}` : null);
   const [form, setForm] = useState<Record<string, unknown>>({});
   const [msg, setMsg] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   useEffect(() => { if (r) setForm(Object.fromEntries(r.fields.map((f) => [f.key, toInput(f, data ? get(data.row, f.key) : undefined)]))); }, [r, data]);
   if (!r) return <Notice tone="warn">Not available for your role.</Notice>;
-  if (!isNew && !data) return <Spinner label="Loading…" />;
+  if (!isNew && !data) return error ? <div className="grid gap-3"><Notice tone="bad">{error}</Notice><button className="btn btn-outline justify-self-start" onClick={() => reload()}>Retry</button></div> : <Spinner label={loading ? "Loading record…" : "Loading…"} />;
   const editable = r.canManage && r.fields.some((f) => !f.readOnly);
   const save = async () => {
     setMsg(null);
@@ -51,7 +51,8 @@ export default function ResourceEdit() {
       <h1 className="text-2xl">{isNew ? `New — ${r.label}` : String(get(data!.row, r.columns[0].key) ?? id)}</h1>
       {!isNew && (
         <details className="panel p-4"><summary className="cursor-pointer font-semibold">All recorded fields</summary>
-          <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[0.95rem]">{Object.entries(data!.row).filter(([k]) => !["passwordHash", "mfa", "storageKey"].includes(k)).map(([k, v]) => <Fragment key={k}><dt className="muted">{k}</dt><dd className="break-words"><Value v={typeof v === "object" && v !== null && !Array.isArray(v) && !("en" in (v as object)) ? JSON.stringify(v) : v} /></dd></Fragment>)}</dl>
+          <p className="muted mt-2 text-sm">Business and record details are shown here. Authentication secrets, private tokens and storage keys are intentionally hidden.</p>
+          <dl className="mt-3 grid grid-cols-[minmax(7rem,auto)_minmax(0,1fr)] gap-x-4 gap-y-2 text-[0.95rem]">{Object.entries(data!.row).filter(([k]) => !/(password|secret|token|hash|storage.?key|credential|private.?key|otp|mfa)/i.test(k)).map(([k, v]) => <Fragment key={k}><dt className="muted break-words">{k}</dt><dd className="break-words">{typeof v === "object" && v !== null && !Array.isArray(v) && !("en" in v) ? <pre className="whitespace-pre-wrap text-sm">{JSON.stringify(v, null, 2)}</pre> : <Value v={v} />}</dd></Fragment>)}</dl>
         </details>
       )}
       {r.fields.length > 0 && (

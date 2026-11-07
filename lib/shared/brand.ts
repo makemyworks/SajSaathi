@@ -9,7 +9,7 @@ export const BRAND = {
   slug: "saj-saathi",
   tagline: "Your everyday care companion",
   supporting: "Discover. Compare. Book. Experience.",
-  colors: { teal: "#183F3A", tealDeep: "#102B28", ivory: "#F7F5EF", gold: "#B98A45", goldLight: "#D9B77C", charcoal: "#202725" },
+  colors: { teal: "#1E5046", tealDeep: "#163731", ivory: "#FAF9F5", gold: "#B58A52", goldLight: "#D5B782", charcoal: "#222D29" },
   supportEmail: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "",
   supportPhone: process.env.NEXT_PUBLIC_SUPPORT_PHONE || "",
   grievanceOfficer: process.env.NEXT_PUBLIC_GRIEVANCE_OFFICER || "",
