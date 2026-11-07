@@ -1,7 +1,7 @@
 import type { Ctx } from "./context";
 import { audit } from "./context";
 import { hashPassword, passwordProblem, randomToken } from "./security";
-import type { Actor, AdminRole, Booking, Category, FieldDef, Payment, Provider, User } from "./types";
+import type { Actor, AdminRole, Booking, Category, FieldDef, Payment, Provider, Session, User } from "./types";
 import { badRequest, conflict, newId, notFound, slugify } from "./util";
 import { DuplicateKeyError } from "./repo";
 
@@ -118,17 +118,68 @@ export async function inviteAdmin(ctx: Ctx, actor: Actor, input: { name: string;
   return { id: u._id, tempPassword }; // shown once to the inviting super admin; ask the new admin to change it and enable MFA
 }
 
-/** One-time bootstrap: creates the first super admin from env if no admin exists. Never runs once any admin exists. */
-export async function bootstrapSuperAdmin(ctx: Ctx, email?: string, password?: string, name = "Founder") {
-  if (!email || !password) return { created: false, reason: "BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD not set" };
-  const existing = await ctx.repo.col<User>("users").count({ role: "admin" });
-  if (existing > 0) return { created: false, reason: "An admin already exists" };
+/**
+ * Founder bootstrap is deliberately one-time by default. To permanently apply changed
+ * BOOTSTRAP_ADMIN_* values to the existing single super-admin record, run
+ * `npm run setup -- --sync-admin` from a trusted machine with the production env pulled.
+ * It never creates/elevates a second administrator and it revokes existing founder sessions.
+ */
+export async function bootstrapSuperAdmin(
+  ctx: Ctx,
+  email?: string,
+  password?: string,
+  name = "Founder",
+  options: { syncExisting?: boolean } = {},
+) {
+  if (!email || !password) return { created: false, updated: false, reason: "BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD not set" };
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedName = name.trim() || "Founder";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) throw badRequest("Enter a valid BOOTSTRAP_ADMIN_EMAIL");
   const problem = passwordProblem(password);
   if (problem || password.length < 12) throw badRequest("Bootstrap password must be at least 12 characters with letters and numbers");
+
+  const users = ctx.repo.col<User>("users");
+  if (options.syncExisting) {
+    const founders = await users.find({ role: "admin", adminRole: "super_admin" });
+    if (founders.length > 1) throw badRequest("More than one super admin exists. Resolve the duplicate accounts from Admin → Admin users before syncing bootstrap credentials.");
+    if (founders.length === 1) {
+      const founder = founders[0];
+      const emailOwner = await users.findOne({ email: normalizedEmail });
+      if (emailOwner && emailOwner._id !== founder._id) throw conflict("email_in_use", "The new bootstrap email is already used by another account. Choose a different email.");
+      const now = ctx.now();
+      let updated: User | null;
+      try {
+        updated = await users.updateOne({ _id: founder._id, role: "admin", adminRole: "super_admin" }, { $set: {
+          name: normalizedName,
+          email: normalizedEmail,
+          passwordHash: await hashPassword(password),
+          updatedAt: now,
+        } });
+      } catch (e) {
+        if (e instanceof DuplicateKeyError) throw conflict("email_in_use", "The new bootstrap email is already used by another account.");
+        throw e;
+      }
+      if (!updated) throw badRequest("The Founder account changed during sync. Retry after checking Admin → Admin users.");
+      await ctx.repo.col<Session>("sessions").deleteMany({ userId: founder._id });
+      await audit(ctx, "system", "admin.bootstrap.sync", "user", founder._id, { emailChanged: founder.email !== normalizedEmail, nameChanged: founder.name !== normalizedName, sessionsRevoked: true });
+      return { created: false, updated: true, reason: "The existing Founder account was updated in MongoDB and its old sessions were revoked." };
+    }
+
+    const adminCount = await users.count({ role: "admin" });
+    if (adminCount > 0) throw badRequest("Admin accounts exist, but no super_admin account was found. Sign in with an existing administrator and resolve ownership before syncing.");
+  }
+
+  const existing = await users.count({ role: "admin" });
+  if (existing > 0) return { created: false, updated: false, reason: "An admin already exists. Use --sync-admin to update the existing Founder account." };
   const now = ctx.now();
-  await ctx.repo.col<User>("users").insertOne({ _id: newId(), role: "admin", adminRole: "super_admin", name, email: email.toLowerCase(), passwordHash: await hashPassword(password), status: "active", locale: "en", consents: [], createdAt: now, updatedAt: now });
+  try {
+    await users.insertOne({ _id: newId(), role: "admin", adminRole: "super_admin", name: normalizedName, email: normalizedEmail, passwordHash: await hashPassword(password), status: "active", locale: "en", consents: [], createdAt: now, updatedAt: now });
+  } catch (e) {
+    if (e instanceof DuplicateKeyError) throw conflict("email_in_use", "The bootstrap email is already used by another account.");
+    throw e;
+  }
   await audit(ctx, "system", "admin.bootstrap", "user");
-  return { created: true };
+  return { created: true, updated: false };
 }
 
 // ---------------- Reports (CSV) ----------------

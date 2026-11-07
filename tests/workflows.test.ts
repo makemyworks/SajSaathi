@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { makeCtx } from "./helpers";
-import { register, login, resolveActor, logout } from "../lib/core/auth";
+import { register, login, resolveActor, logout, updateAdminProfile } from "../lib/core/auth";
 import { startApplication, updateApplication, upsertService, upsertStaff, acceptAgreement, submitApplication, reviewApplication, applicationChecklist, partnerDashboard, commissionStatement, addBlock } from "../lib/core/partner";
 import { bootstrapSuperAdmin, adminDashboard, saveCategory, report } from "../lib/core/admin";
 import { searchProviders, getProviderPublic, listCategories } from "../lib/core/catalog";
@@ -230,6 +230,25 @@ test("auth: sessions, logout, lockout, MFA, admin permissions", async () => {
   assert.equal(adminCan({ userId: "x", role: "customer" }, "dashboard.view"), false);
   const second = await bootstrapSuperAdmin(ctx, "evil@example.in", "AnotherPass2026!");
   assert.equal(second.created, false, "bootstrap never runs twice");
+});
+
+test("Founder bootstrap sync and admin profile changes permanently update the database login", async () => {
+  const { ctx } = await setup();
+  const oldLogin = await login(ctx, { identifier: "founder@example.in", password: "FounderPass2026!", expectRoles: ["admin"] });
+  assert.ok(await resolveActor(ctx, oldLogin.token));
+
+  const synced = await bootstrapSuperAdmin(ctx, "owner@sajsaathi.in", "UpdatedFounder2026!", "Saj Saathi Founder", { syncExisting: true });
+  assert.equal(synced.updated, true);
+  assert.equal(await resolveActor(ctx, oldLogin.token), null, "credential sync revokes prior Founder sessions");
+  await assert.rejects(login(ctx, { identifier: "founder@example.in", password: "FounderPass2026!", expectRoles: ["admin"] }), /Wrong/);
+  await login(ctx, { identifier: "owner@sajsaathi.in", password: "UpdatedFounder2026!", expectRoles: ["admin"] });
+
+  const actor = (await resolveActor(ctx, (await login(ctx, { identifier: "owner@sajsaathi.in", password: "UpdatedFounder2026!", expectRoles: ["admin"] })).token))!;
+  await assert.rejects(updateAdminProfile(ctx, actor, { name: "Saj Saathi Founder", email: "new@sajsaathi.in", currentPassword: "WrongPassword2026" }), /Current password/);
+  const updated = await updateAdminProfile(ctx, actor, { name: "Founder Account", email: "admin@sajsaathi.in", currentPassword: "UpdatedFounder2026!" });
+  assert.equal(updated.email, "admin@sajsaathi.in");
+  assert.equal(updated.name, "Founder Account");
+  await login(ctx, { identifier: "admin@sajsaathi.in", password: "UpdatedFounder2026!", expectRoles: ["admin"] });
 });
 
 test("payments: order, signature, webhook idempotency, refund", async () => {

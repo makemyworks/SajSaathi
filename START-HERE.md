@@ -56,7 +56,7 @@ Add for Production and Preview:
 - `NEXT_PUBLIC_API_URL` — `https://YOUR-PROJECT.vercel.app/api/v1`.
 - `NEXT_PUBLIC_PARTNER_URL` — partner `.vercel.app` URL after the partner project exists; until then you may leave it empty.
 
-Do not add `BOOTSTRAP_ADMIN_PASSWORD` to Vercel. The first admin is created once by `npm run setup` from your computer. Before the Partner project is deployed, partner application links on the public site show a connection notice rather than linking to localhost. After deploying Partner, set `NEXT_PUBLIC_PARTNER_URL` here to its real `.vercel.app` URL and redeploy the combined project.
+`BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, and `BOOTSTRAP_ADMIN_NAME` are only read by the trusted setup script, not by public website requests. They are not required as runtime Vercel variables. If you keep them in Vercel so you can pull them with `vercel env pull`, store them in **Production only**, never Preview. Changing them does not update MongoDB until you run the explicit `npm run setup -- --sync-admin` command described in Step 6. Before the Partner project is deployed, partner application links on the public site show a connection notice rather than linking to localhost. After deploying Partner, set `NEXT_PUBLIC_PARTNER_URL` here to its real `.vercel.app` URL and redeploy the combined project.
 
 ## 6. Initialise the production database and create the Founder account
 On your computer, in the extracted merged project folder:
@@ -73,7 +73,11 @@ Run once against the intended database:
 ```bash
 npm run setup
 ```
-This creates indexes, initial catalog/location/settings data and the first Super Admin. After success, delete `BOOTSTRAP_ADMIN_PASSWORD` from `.env.local` or clear the value. Never commit `.env.local`. Do not run setup repeatedly unless you understand its idempotent bootstrap behavior. Do not seed demo providers into production.
+This creates indexes, initial catalog/location/settings data and the first Super Admin. After success, delete `BOOTSTRAP_ADMIN_PASSWORD` from `.env.local` or clear the value. Never commit `.env.local`. Do not seed demo providers into production.
+
+**To permanently change the existing Founder login from Vercel environment variables:** update `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, and optionally `BOOTSTRAP_ADMIN_NAME` in the Main Customer + Admin Vercel project (Production). Then, on your trusted computer in this project folder, run `vercel env pull .env.local --environment=production` (the project must already be linked with `vercel link`) and run `npm run setup -- --sync-admin`. This explicit command updates the one existing `super_admin` record in MongoDB, keeps its MFA configuration, and revokes all old Founder sessions. Changing Vercel variables or redeploying alone does **not** change the stored MongoDB login. Keep `.env.local` private and delete/clear the bootstrap password after the sync.
+
+You can also change your name/email permanently inside Admin → Security after confirming your current password, and change your password there. These changes are saved directly to MongoDB and are not overwritten by normal deployments.
 
 ## 7. Test the deployment
 Open:

@@ -3,7 +3,7 @@ import { audit } from "./context";
 import { DuplicateKeyError } from "./repo";
 import { hashPassword, passwordProblem, signToken, verifyPassword, verifyToken, verifyTotp } from "./security";
 import type { Actor, Consent, Role, Session, User } from "./types";
-import { AppError, badRequest, newId, normalizeIndianPhone } from "./util";
+import { AppError, badRequest, conflict, newId, normalizeIndianPhone } from "./util";
 
 export const SESSION_TTL: Record<Role, number> = {
   customer: 60 * 60 * 24 * 30,
@@ -124,6 +124,35 @@ export async function changePassword(ctx: Ctx, actor: Actor, current: string, ne
   if (problem) throw badRequest(problem);
   await ctx.repo.col<User>("users").updateOne({ _id: user._id }, { $set: { passwordHash: await hashPassword(next), updatedAt: ctx.now() } });
   await logoutAll(ctx, user._id);
+}
+
+
+/** Permanently updates the signed-in administrator identity after current-password confirmation. */
+export async function updateAdminProfile(
+  ctx: Ctx,
+  actor: Actor,
+  input: { name: string; email: string; currentPassword: string },
+): Promise<User> {
+  if (actor.role !== "admin") throw new AppError(403, "admin_only", "Only administrators can update this profile");
+  const users = ctx.repo.col<User>("users");
+  const current = await users.findOne({ _id: actor.userId, role: "admin" });
+  if (!current || !(await verifyPassword(input.currentPassword, current.passwordHash))) throw badRequest("Current password is not correct");
+  const name = input.name.trim();
+  const email = input.email.trim().toLowerCase();
+  if (name.length < 2 || name.length > 80) throw badRequest("Name must be between 2 and 80 characters");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 120) throw badRequest("Enter a valid email address");
+  const emailOwner = await users.findOne({ email });
+  if (emailOwner && emailOwner._id !== current._id) throw conflict("email_in_use", "This email is already linked to another account");
+  let updated: User | null;
+  try {
+    updated = await users.updateOne({ _id: current._id, role: "admin" }, { $set: { name, email, updatedAt: ctx.now() } });
+  } catch (e) {
+    if (e instanceof DuplicateKeyError) throw conflict("email_in_use", "This email is already linked to another account");
+    throw e;
+  }
+  if (!updated) throw badRequest("Your admin account could not be updated. Please retry.");
+  await audit(ctx, actor, "admin.profile.update", "user", current._id, { emailChanged: current.email !== email, nameChanged: current.name !== name });
+  return updated;
 }
 
 /** Public projection of a user — never return passwordHash or MFA secrets. */
