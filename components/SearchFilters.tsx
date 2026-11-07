@@ -23,6 +23,7 @@ export function SearchFilters({ categories, atHomeAllowed }: { categories: { slu
           router.push(`/providers?${q.toString()}`);
         }}
       >
+        {v("q") && <input type="hidden" name="q" defaultValue={v("q")} />}
         <label className="field"><span>{t.search.category}</span>
           <select name="category" className="input" defaultValue={v("category")}>
             <option value="">{t.search.allCategories}</option>

@@ -1,55 +1,50 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Search } from "lucide-react";
+import { Search, MapPin, Scissors, Store } from "lucide-react";
 import { useI18n } from "./I18n";
-import { istDate, dayLabel } from "@/lib/shared/format";
 
-/**
- * The signature element of the home page: the search reads as a sentence.
- * "I'm looking for [service] in [city] on [day]" — each blank is a real, labelled form control.
- */
+/** Accessible, mobile-first discovery form. Every field maps to the existing provider search API. */
 export function HeroSearch({ categories, cities }: { categories: { slug: string; name: { en: string; hi?: string } }[]; cities: string[] }) {
-  const { t, locale, pick } = useI18n();
+  const { t, pick, locale } = useI18n();
   const router = useRouter();
+  const [query, setQuery] = useState("");
   const [cat, setCat] = useState("");
   const [city, setCity] = useState("");
-  const [day, setDay] = useState("");
-  const days = Array.from({ length: 7 }, (_, i) => istDate(i));
-  const blank = "appearance-none bg-transparent border-0 border-b-2 border-[var(--color-gold-light)] text-[var(--color-gold-light)] font-semibold px-1 py-0 rounded-none focus:outline-none focus:border-white cursor-pointer max-w-full";
 
   return (
     <form
       role="search"
-      className="grid gap-6"
+      className="ss-search"
       onSubmit={(e) => {
         e.preventDefault();
         const q = new URLSearchParams();
+        if (query.trim()) q.set("q", query.trim());
         if (cat) q.set("category", cat);
-        if (city) { if (/^\d{6}$/.test(city)) q.set("pin", city); else q.set("city", city); }
-        if (day) q.set("date", day);
-        router.push(`/providers?${q.toString()}`);
+        if (city.trim()) { if (/^\d{6}$/.test(city.trim())) q.set("pin", city.trim()); else q.set("city", city.trim()); }
+        const params = q.toString();
+        router.push(params ? `/providers?${params}` : "/providers");
       }}
     >
-      <p className="text-[clamp(1.6rem,1rem+3.2vw,3.1rem)] leading-[1.35] text-white" style={{ fontFamily: "var(--font-display)" }}>
-        {t.hero.lead}{" "}
-        <label className="sr-only" htmlFor="hs-cat">{t.search.category}</label>
-        <select id="hs-cat" className={blank} value={cat} onChange={(e) => setCat(e.target.value)}>
-          <option value="" className="text-[var(--color-ink)]">{t.hero.anyService}</option>
-          {categories.map((c) => <option key={c.slug} value={c.slug} className="text-[var(--color-ink)]">{pick(c.name)}</option>)}
-        </select>{" "}
-        {t.hero.in}{" "}
-        <label className="sr-only" htmlFor="hs-city">{t.search.city}</label>
-        <input id="hs-city" list="hs-cities" className={`${blank} w-[7.5em] placeholder:text-[var(--color-gold-light)]/70`} placeholder={t.hero.anyCity} value={city} onChange={(e) => setCity(e.target.value)} autoComplete="address-level2" />
-        <datalist id="hs-cities">{cities.map((c) => <option key={c} value={c} />)}</datalist>{" "}
-        {t.hero.on}{" "}
-        <label className="sr-only" htmlFor="hs-day">{t.booking.chooseDate}</label>
-        <select id="hs-day" className={blank} value={day} onChange={(e) => setDay(e.target.value)}>
-          <option value="" className="text-[var(--color-ink)]">{t.hero.anyDay}</option>
-          {days.map((d) => { const l = dayLabel(d, locale); return <option key={d} value={d} className="text-[var(--color-ink)]">{`${l.day} ${l.num} ${l.month}`}</option>; })}
-        </select>
-      </p>
-      <div><button className="btn btn-xl bg-[var(--color-gold-light)] text-[var(--color-teal-950)] hover:bg-white" type="submit"><Search aria-hidden size={20} />{t.hero.find}</button></div>
+      <div className="ss-search-fields">
+        <label className="ss-search-field">
+          <span><Store size={16} /> {locale === "hi" ? "सेवा या सैलून" : "Service or salon"}</span>
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={locale === "hi" ? "जैसे हेयरकट, फेशियल" : "e.g. haircut, facial"} autoComplete="off" maxLength={80} />
+        </label>
+        <label className="ss-search-field">
+          <span><Scissors size={16} /> {t.search.category}</span>
+          <select value={cat} onChange={(e) => setCat(e.target.value)}>
+            <option value="">{t.hero.anyService}</option>
+            {categories.map((c) => <option key={c.slug} value={c.slug}>{pick(c.name)}</option>)}
+          </select>
+        </label>
+        <label className="ss-search-field">
+          <span><MapPin size={16} /> {t.search.city} / PIN</span>
+          <input list="ss-home-cities" value={city} onChange={(e) => setCity(e.target.value)} placeholder={t.hero.anyCity} autoComplete="address-level2" maxLength={80} />
+          <datalist id="ss-home-cities">{cities.map((c) => <option key={c} value={c} />)}</datalist>
+        </label>
+      </div>
+      <button className="ss-search-submit" type="submit"><Search size={19} />{t.hero.find}<span aria-hidden="true" className="ss-search-arrow">→</span></button>
     </form>
   );
 }

@@ -18,7 +18,9 @@ export async function Header() {
   const links = [
     { href: "/services", label: t.nav.services },
     { href: "/providers", label: t.nav.providers },
+    { href: "/offers", label: t.footer.offers },
     { href: "/how-it-works", label: t.nav.howItWorks },
+    { href: "/help", label: t.nav.help },
     { href: "/partner", label: t.nav.forPartners },
   ];
   return (
