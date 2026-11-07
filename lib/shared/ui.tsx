@@ -36,3 +36,14 @@ export function Notice({ tone = "info", children }: { tone?: "info" | "warn" | "
 export function Spinner({ label }: { label: string }) {
   return <span role="status" className="inline-flex items-center gap-2 muted"><span aria-hidden className="size-4 rounded-full border-2 border-[var(--color-line)] border-t-[var(--color-teal-700)] animate-spin" />{label}</span>;
 }
+
+export function LoadFailure({ message, onRetry, title = "This information could not be loaded." }: { message: string; onRetry?: () => void; title?: string }) {
+  return (
+    <div className="grid gap-3">
+      <Notice tone="bad">
+        <div className="grid gap-1"><strong>{title}</strong><p>{message}</p></div>
+      </Notice>
+      {onRetry && <button type="button" className="btn btn-outline justify-self-start" onClick={onRetry}>Try again</button>}
+    </div>
+  );
+}

@@ -1,0 +1,18 @@
+SAJ SAATHI PARTNER PORTAL PATCH — GITHUB ONLY
+
+Repository: makemyworks/SajSaathiPartner
+Live site: https://sajsaathipartner.vercel.app
+
+1. Extract this patch ZIP.
+2. Copy ALL contents, preserving folders, into the ROOT of the existing SajSaathiPartner GitHub repository. Replace matching files.
+3. Commit to main and let Vercel deploy.
+4. Keep these Partner Vercel variables (Production and Preview):
+   API_URL = https://sajsaathi.vercel.app/api/v1
+   INTERNAL_API_KEY = exactly the same value as in the Main `sajsaathi` Vercel project
+   NEXT_PUBLIC_CUSTOMER_URL = https://sajsaathi.vercel.app
+   NEXT_PUBLIC_PARTNER_URL = https://sajsaathipartner.vercel.app
+   NEXT_PUBLIC_ADMIN_URL = https://sajsaathi.vercel.app/admin
+5. Do NOT add MONGODB_URI, MONGODB_DB, AUTH_SECRET or PARTNER_OWNER_PASSWORD to the Partner project. The main project owns them.
+6. Partner owner login email/password are set in the Main `sajsaathi` Vercel project via PARTNER_OWNER_EMAIL and PARTNER_OWNER_PASSWORD. After changing them, redeploy Main. No CMD is needed.
+
+Application retention improvements: the central API recovers a missing user.providerId pointer from an existing application owned by that same user; repeating the first-step POST returns the existing application instead of creating a new one; the form also saves unsubmitted work locally on the device until the server confirms the save.
